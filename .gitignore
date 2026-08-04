@@ -1,0 +1,17 @@
+# 敏感信息与运行时文件——绝不提交
+auth.json
+.env
+.env.deepseek
+*.log
+router.pid
+*.bak*
+models_cache.json
+
+# 环境/编译产物
+.venv/
+__pycache__/
+.cargo/
+.rustup/
+rust-forwarder/target/
+rustup-init.exe
+node_modules/
