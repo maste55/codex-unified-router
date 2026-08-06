@@ -43,6 +43,28 @@ function convertInputToMessages(body) {
   }
   return msgs;
 }
+// 过滤工具：只保留 apply_patch（deepseek/dashscope 等上游不支持 exec/web_search 等自定义工具）
+function filterTools(body) {
+  if (Array.isArray(body.tools)) {
+    // 只保留 apply_patch，并转成 deepseek/OpenAI responses 兼容格式（name 在顶层）
+    const kept = body.tools.filter((tool) => {
+      const name = typeof tool === "string" ? tool : (tool?.function?.name || tool?.name || "");
+      return name === "apply_patch";
+    });
+    body.tools = kept.map((tool) => {
+      if (typeof tool === "string") return { type: "function", name: tool, parameters: { type: "object", properties: {} } };
+      if (tool?.function?.name) {
+        return { type: "function", name: tool.function.name, parameters: tool.function.parameters || { type: "object", properties: {} } };
+      }
+      return tool;
+    });
+  }
+  if (body.tool_choice && (!body.tools || body.tools.length === 0)) {
+    delete body.tool_choice;
+  }
+  return body;
+}
+
 function loadOpencodeGoKey() {
   try {
     const data = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".local", "share", "opencode", "auth.json"), "utf8"));
@@ -221,6 +243,7 @@ const server = http.createServer(async (req, res) => {
         body.messages = convertInputToMessages(body);
         body.stream = true;
         delete body.store; delete body.instructions; delete body.max_output_tokens;
+        filterTools(body);
         const up = await fetch(upstreamBase + upstreamPath, {
           method: "POST",
           headers: { authorization: "Bearer " + goKey, "content-type": "application/json" },
@@ -241,6 +264,7 @@ const server = http.createServer(async (req, res) => {
         body.messages = convertInputToMessages(body);
         body.stream = true;
         delete body.store; delete body.instructions; delete body.max_output_tokens;
+        filterTools(body);
         const up = await fetch(upstreamBase + upstreamPath, {
           method: "POST",
           headers: { authorization: "Bearer " + dsKey, "content-type": "application/json" },
@@ -257,6 +281,7 @@ const server = http.createServer(async (req, res) => {
         upstreamPath = "/responses";
         const dsKey = loadKeymanKey("opencode:deepseek") || loadKeymanKey("env:DEEPSEEK_API_KEY") || loadKeymanKey("deepseek");
         if (!dsKey) return json(res, 500, { error: "deepseek key unavailable" });
+        filterTools(body);
         const up = await fetch(upstreamBase + upstreamPath, {
           method: "POST",
           headers: { authorization: "Bearer " + dsKey, "content-type": "application/json" },
