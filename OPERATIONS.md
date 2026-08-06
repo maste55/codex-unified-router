@@ -245,3 +245,18 @@ cd ~/.codex-chatgpt-web/versions/2.0.0-win32-x64 && \
 - **数据安全**：会话数据在 `~/.codex/sessions` + `state_5.sqlite`，备份在 `~/.codex/backup-*`
 - **key 安全**：DeepSeek key 在 `E:/codex-work/cangku/inventory-reconciliation/.env`，不要提交到仓库
 - **官方额度**：ChatGPT 官方模型受账号额度限制（429），deepseek 是用户自有 key 不受影响
+
+---
+
+## 十一、思考显示配置（2026-08-07 新增，最终根因）
+
+**"无法思考/思考不显示"的最终根因：`model_reasoning_summary` 未设置 = 默认 `none`（禁用思考显示）**
+
+```toml
+model_reasoning_effort = "high"
+model_reasoning_summary = "auto"   # auto | concise | detailed | none（none=不显示思考）
+```
+
+- 官方配置（Issue #2760）：`model_reasoning_summary = "auto"` 默认推荐
+- 之前修的 SSE 事件/reasoning 格式都是**必要但不充分**——数据全对但配置层禁用显示
+- CLI 验证：`reasoning summaries: auto` 后思考正常显示
