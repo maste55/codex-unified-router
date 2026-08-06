@@ -453,7 +453,25 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "GET") return proxy(req, res);
   if (req.method !== "POST") return json(res, 405, { error: "Method not allowed" });
-  return proxy(req, res);
+  // compact 本地模拟：返回合法 compaction 流（Codex 期待 SSE 流 + response.completed）
+  if (url.pathname === "/v1/responses/compact" || url.pathname === "/responses/compact") {
+    console.error(JSON.stringify({ event: "compact_request", url: req.url }));
+    let reqBody = {};
+    try { reqBody = JSON.parse((await readBody(req)).toString("utf8")); } catch {}
+    const input = Array.isArray(reqBody.input) ? reqBody.input : [];
+    const lastUser = [...input].reverse().find((it) => it?.role === "user");
+    const retained = [];
+    if (lastUser) {
+      retained.push({ id: "msg_keep_" + Date.now(), type: "message", role: "user", status: "completed", content: lastUser.content || [{ type: "input_text", text: "（对话已压缩）" }] });
+    }
+    retained.push({ id: "cmp_" + Date.now(), type: "compaction", encrypted_content: Buffer.from("local-compaction-" + Date.now()).toString("base64") });
+    const resp = { id: "resp_compact_" + Date.now(), object: "response.compaction", created_at: Math.floor(Date.now() / 1000), output: retained, usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } };
+    res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+    res.write("data: " + JSON.stringify({ type: "response.completed", response: resp }) + "\n\n");
+    res.write("data: [DONE]\n\n");
+    return res.end();
+  }
+    return proxy(req, res);
 });
 
 server.on("upgrade", (req, socket) => {
