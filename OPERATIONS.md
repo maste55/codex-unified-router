@@ -212,3 +212,6 @@ keyman import               # 批量导入已知来源
 - **数据安全**：会话数据在 `~/.codex/sessions` + `state_5.sqlite`，备份在 `~/.codex/backup-*`
 - **key 安全**：vault DPAPI 加密，仅当前 Windows 用户可解；不要复制 vault 到其他机器
 - **官方额度**：ChatGPT 官方模型受账号额度限制（429），deepseek/opencode/dashscope 是用户自有 key/订阅不受影响
+
+### exec 工具报错修复（2026-08-06）
+router sanitizeDeepSeekBody 加 filterDeepSeekTools，过滤 exec 保留 apply_patch/web_search/function，已验证 200。

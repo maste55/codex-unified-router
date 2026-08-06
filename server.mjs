@@ -266,11 +266,41 @@ function decodedBody(body, encoding = "") {
   return encoding.toLowerCase() === "zstd" ? zstdDecompressSync(body) : body;
 }
 
+// DeepSeek 官方工具支持：function / web_search / custom apply_patch（exec 等不支持）
+function filterDeepSeekTools(value) {
+  if (Array.isArray(value.tools)) {
+    value.tools = value.tools.filter((tool) => {
+      if (typeof tool === "string") return tool === "apply_patch" || tool === "web_search";
+      const type = tool?.type || "";
+      const name = tool?.function?.name || tool?.name || "";
+      if (type === "web_search") return true;
+      if (type === "function") return true;
+      if (type === "custom") return name === "apply_patch";
+      return true;
+    });
+    // 转 deepseek 兼容格式（function name 提到顶层）
+    value.tools = value.tools.map((tool) => {
+      if (typeof tool === "string") {
+        return tool === "web_search" ? { type: "web_search" } : { type: "custom", name: "apply_patch" };
+      }
+      if (tool?.function?.name) {
+        return { type: "function", name: tool.function.name, parameters: tool.function.parameters || { type: "object", properties: {} } };
+      }
+      return tool;
+    });
+  }
+  if (value.tool_choice && (!value.tools || value.tools.length === 0)) {
+    delete value.tool_choice;
+  }
+  return value;
+}
+
 function sanitizeDeepSeekBody(body, encoding = "") {
   try {
     const value = JSON.parse(decodedBody(body, encoding).toString("utf8"));
     if (value && typeof value === "object" && !Array.isArray(value)) {
       delete value.service_tier;
+      filterDeepSeekTools(value);
     }
     return Buffer.from(JSON.stringify(value));
   } catch {
@@ -1050,6 +1080,41 @@ const server = http.createServer(async (req, res) => {
       openai: "all non-deepseek model ids",
       deepseek: "deepseek-* model ids",
     });
+  }
+  // compact 本地模拟：不依赖上游 compact 端点（官方不支持 deepseek compact，返回合法格式）
+  if (req.method === "POST" && (url.pathname === "/v1/responses/compact" || url.pathname === "/v1/responses/compact/")) {
+    let reqBody = {};
+    try {
+      const raw = await readBody(req);
+      const enc = (req.headers["content-encoding"] || "").toLowerCase();
+      const decoded = enc === "zstd" ? zstdDecompressSync(raw) : raw;
+      reqBody = JSON.parse(decoded.toString("utf8"));
+    } catch {}
+    const input = Array.isArray(reqBody.input) ? reqBody.input : [];
+    const lastUser = [...input].reverse().find((it) => it?.role === "user" || (it?.type === "message" && it?.role === "user"));
+    const retained = [];
+    if (lastUser) {
+      retained.push({
+        id: "msg_keep_" + Date.now(),
+        type: "message",
+        role: "user",
+        status: "completed",
+        content: lastUser.content || [{ type: "input_text", text: String(lastUser.text || "（对话已压缩）") }],
+      });
+    }
+    retained.push({
+      id: "cmp_" + Date.now(),
+      type: "compaction",
+      encrypted_content: Buffer.from("local-compaction-placeholder-" + Date.now()).toString("base64"),
+    });
+    const resp = {
+      id: "resp_compact_" + Date.now(),
+      object: "response.compaction",
+      created_at: Math.floor(Date.now() / 1000),
+      output: retained,
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    };
+    return json(res, 200, resp);
   }
   // 非 POST 请求（GET/PUT/DELETE）：会话列表/线程等走 bridge（官方通道），不 405 拦截
   if (req.method !== "POST") {
