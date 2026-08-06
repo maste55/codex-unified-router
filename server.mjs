@@ -113,6 +113,9 @@ function extractApiKey(value) {
 }
 
 function loadOpencodeGoKey() {
+  // 优先 keyman vault
+  const k = loadKeymanKey("opencode:opencode-go") || loadKeymanKey("opencode:opencode") || loadKeymanKey("opencode-go");
+  if (k) return k;
   const candidates = [
     path.join(os.homedir(), ".local", "share", "opencode", "auth.json"),
     path.join(os.homedir(), ".config", "opencode", "auth.json"),
@@ -143,8 +146,35 @@ function opencodeGoHeaders(apiKey, source) {
   return headers;
 }
 
+// keyman vault 读取：~/.codex/keyman/vault.json（DPAPI 加密）
+const KEYMAN_VAULT = path.join(os.homedir(), ".codex", "keyman", "vault.json");
+function keymanDecrypt(enc) {
+  try {
+    const ps = `
+Add-Type -AssemblyName System.Security;
+$enc = [Convert]::FromBase64String($env:KM_ENC);
+$bytes = [System.Security.Cryptography.ProtectedData]::Unprotect($enc, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser);
+[System.Text.Encoding]::UTF8.GetString($bytes)`;
+    const out = _execFileSync("powershell.exe", ["-NoProfile", "-Command", ps], {
+      env: { ...process.env, KM_ENC: enc },
+      encoding: "utf8", windowsHide: true,
+    });
+    return out.trim();
+  } catch { return ""; }
+}
+function loadKeymanKey(name) {
+  try {
+    const vault = JSON.parse(fs.readFileSync(KEYMAN_VAULT, "utf8"));
+    const entry = vault?.keys?.[name];
+    if (entry?.enc) return keymanDecrypt(entry.enc);
+  } catch {}
+  return "";
+}
 // DashScope key：从 opencode auth.json 的 qwen 字段读
 function loadDashScopeKey() {
+  // 优先 keyman vault
+  const k = loadKeymanKey("opencode:qwen") || loadKeymanKey("env:DASHSCOPE_API_KEY") || loadKeymanKey("dashscope");
+  if (k) return k;
   const candidates = [
     path.join(os.homedir(), ".local", "share", "opencode", "auth.json"),
     path.join(os.homedir(), ".config", "opencode", "auth.json"),
@@ -434,11 +464,15 @@ async function proxy(req, res) {
     let baseUrl;
 
     if (isDeepSeek) {
-      const env = parseEnvFile(config.deepseekEnvFile);
-      if (!env.AI_API_KEY) throw new Error("DeepSeek API key is unavailable");
+      let dsKey = loadKeymanKey("opencode:deepseek") || loadKeymanKey("env:DEEPSEEK_API_KEY") || loadKeymanKey("deepseek");
+      if (!dsKey) {
+        const env = parseEnvFile(config.deepseekEnvFile);
+        dsKey = env.AI_API_KEY || "";
+      }
+      if (!dsKey) throw new Error("DeepSeek API key is unavailable");
       body = sanitizeDeepSeekBody(incomingBody, incomingEncoding);
       body = convertImagesToText(body);
-      headers = deepSeekHeaders(env.AI_API_KEY, req.headers);
+      headers = deepSeekHeaders(dsKey, req.headers);
       baseUrl = config.deepseekBaseUrl;
     } else if (isOpencodeGo) {
       const goKey = loadOpencodeGoKey();
