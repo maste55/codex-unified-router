@@ -195,7 +195,20 @@ function convertChatToResponses(chatBody, model) {
     const contentText = typeof m.content === "string" ? m.content : "";
     if (contentText) output.push({ type: "message", id: "msg_" + Date.now(), role: "assistant", status: "completed", content: [{ type: "output_text", text: contentText, annotations: [] }] });
   }
-  return { id: chatBody?.id || ("resp_" + Date.now()), object: "response", created_at: chatBody?.created || Math.floor(Date.now() / 1000), status: "completed", model: model || chatBody?.model || "", output, usage: chatBody?.usage || { input_tokens: 0, output_tokens: 0, total_tokens: 0 } };
+  const rawUsage = chatBody?.usage || {};
+  // 映射 deepseek chat usage → Responses 格式（Codex 要求 input_tokens/output_tokens）
+  const usage = {
+    input_tokens: rawUsage.prompt_tokens ?? rawUsage.input_tokens ?? 0,
+    output_tokens: rawUsage.completion_tokens ?? rawUsage.output_tokens ?? 0,
+    total_tokens: rawUsage.total_tokens ?? 0,
+    input_tokens_details: {
+      cached_tokens: rawUsage.prompt_cache_hit_tokens ?? (rawUsage.prompt_tokens_details?.cached_tokens ?? 0),
+    },
+    output_tokens_details: {
+      reasoning_tokens: rawUsage.completion_tokens_details?.reasoning_tokens ?? 0,
+    },
+  };
+  return { id: chatBody?.id || ("resp_" + Date.now()), object: "response", created_at: chatBody?.created || Math.floor(Date.now() / 1000), status: "completed", model: model || chatBody?.model || "", output, usage };
 }
 
 function serializeResponsesSSE(resp, requestId) {
