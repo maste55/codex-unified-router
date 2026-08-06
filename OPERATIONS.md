@@ -173,7 +173,13 @@ keyman import               # 批量导入已知来源
 **原因**：ChatGPT 账号额度用完（8月8日 12:55 重置）。
 **处理**：用 deepseek/opencode/dashscope 通道（不受官方额度限制）。
 
-### 7.6 opencode-go 503
+### 7.6 remote compact 报错（deepseek 对话过长时）
+
+**报错**：`remote compaction v2 expected exactly one compaction output item, got 0 from 2 output items`
+**原因**：deepseek 响应带 `<think>` 推理，Codex 的 remote_compaction_v2 解析器拆成 2 个 output，找不到 compact 项（官方已知 bug Issue #179/#28592）。
+**处理**：已配置双保险（config.toml 的 `model_auto_compact_token_limit=200000` + 环境变量 `CODEX_DISABLE_REMOTE_COMPACT=1`），让 Codex 走本地压缩。
+
+### 7.7 opencode-go 503
 
 **原因**：opencode.ai 上游临时故障（直接调官方也 503，非本地问题）。
 **处理**：等待恢复，或切换 deepseek/dashscope 通道。
