@@ -177,7 +177,7 @@ keyman import               # 批量导入已知来源
 
 **报错**：`remote compaction v2 expected exactly one compaction output item, got 0 from 2 output items`
 **原因**：deepseek 响应带 `<think>` 推理，Codex 的 remote_compaction_v2 解析器拆成 2 个 output，找不到 compact 项（官方已知 bug Issue #179/#28592）。
-**处理**：bridge 对 `/v1/responses/compact` **本地模拟成功**（返回含 message + compaction 项的合法 `response.compaction`），不再依赖上游 compact 端点（deepseek 无此端点、官方受额度限制）。已验证 compact 请求与后续对话均 200。
+**最终结论（2026-08-06 实测）**：Codex 桌面版走官方通道（TUN 劫持，bridge 0 请求），官方 compact 端点不支持 deepseek 模型（400）；官方模型 compact 需额度（429 至 8/8 重置）。桌面版用官方模型 + CLI 用 deepseek（走 bridge 正常）。原方案：bridge 对 `/v1/responses/compact` **本地模拟成功**（返回含 message + compaction 项的合法 `response.compaction`），不再依赖上游 compact 端点（deepseek 无此端点、官方受额度限制）。已验证 compact 请求与后续对话均 200。
 
 ### 7.7 opencode-go 503
 
