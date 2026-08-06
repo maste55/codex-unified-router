@@ -414,22 +414,32 @@ async function handleListModels(req, res, url) {
     const { valid, auth } = authenticate(req);
     if (!valid) return json(res, 401, { error: "Local router authentication failed" });
     const clientVersion = url.searchParams.get("client_version") || "0.146.0";
-    const upstreamUrl = new URL(`/v1/models?client_version=${encodeURIComponent(clientVersion)}`, `${config.openaiBaseUrl.replace(/\/$/, "")}/`);
-    const upstream = await fetch(upstreamUrl, {
-      headers: { authorization: `Bearer ${auth.accessToken}`, accept: "application/json" },
-      signal: AbortSignal.timeout(60000),
-    });
-    const data = await upstream.json();
-    const openaiModels = Array.isArray(data?.models) ? data.models : [];
-    // 合并 deepseek 模型（从 unified-models.json 读取）
-    let deepseekModels = [];
+    // 本地 unified-models.json 是模型权威源（含官方 + deepseek，9 个）
+    let localModels = [];
     try {
       const unifiedPath = path.join(root, "..", "unified-models.json");
       const unified = JSON.parse(fs.readFileSync(unifiedPath, "utf8"));
-      deepseekModels = (unified.models || []).filter((m) => m.slug && m.slug.startsWith("deepseek-"));
+      localModels = Array.isArray(unified.models) ? unified.models : [];
     } catch {}
-    const seen = new Set(openaiModels.map((m) => m.slug));
-    const merged = [...openaiModels, ...deepseekModels.filter((m) => !seen.has(m.slug))];
+    const localSlugs = new Set(localModels.map((m) => m.slug));
+    let merged = [...localModels];
+    // 17841 桥在线时补充实时官方模型（去重）
+    try {
+      const upstreamUrl = new URL(`/v1/models?client_version=${encodeURIComponent(clientVersion)}`, `${config.openaiBaseUrl.replace(/\/$/, "")}/`);
+      const upstream = await fetch(upstreamUrl, {
+        headers: { authorization: `Bearer ${auth.accessToken}`, accept: "application/json" },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (upstream.ok) {
+        const data = await upstream.json();
+        const openaiModels = Array.isArray(data?.models) ? data.models : [];
+        const seen = new Set(localSlugs);
+        merged = [...merged, ...openaiModels.filter((m) => !seen.has(m.slug))];
+      }
+    } catch (err) {
+      // 17841 桥不可用：降级返回本地模型（deepseek 始终可见），不整体 502
+      console.error(JSON.stringify({ event: "list_models_upstream_degraded", error: err?.message || "upstream unavailable" }));
+    }
     return json(res, 200, { models: merged });
   } catch (error) {
     console.error(JSON.stringify({ event: "list_models_error", error: error?.message || "failed" }));
