@@ -222,11 +222,16 @@ function serializeResponsesSSE(resp, requestId) {
     const copy = { ...item, id: item.id || ("evt_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6)) };
     events.push({ type: "response.output_item.added", output_index: events.filter(e => e.type === "response.output_item.added").length, item: copy });
     if (item.type === "reasoning") {
-      // 思考过程专用事件（Codex 据此显示"思考中/思考过程"）
+      // 思考过程专用事件（OpenAI 官方格式：part.added → text.delta → part.done）
       const rid = copy.id || ("rs_" + Date.now());
       const rtext = (item.summary && item.summary[0]?.text) || (item.content && item.content[0]?.text) || "";
-      events.push({ type: "response.reasoning_summary.delta", item_id: rid, output_index: events.filter(e => e.type === "response.output_item.added").length - 1, summary: [{ type: "summary_text", text: rtext }] });
-      events.push({ type: "response.reasoning_summary.done", item_id: rid, output_index: events.filter(e => e.type === "response.output_item.added").length - 1, summary: [{ type: "summary_text", text: rtext }] });
+      const outIdx = events.filter(e => e.type === "response.output_item.added").length - 1;
+      // 1. reasoning summary part 添加
+      events.push({ type: "response.reasoning_summary_part.added", item_id: rid, output_index: outIdx, content_index: 0, summary: [{ type: "summary_text", text: rtext }] });
+      // 2. 思考文本增量（Codex 界面显示思考内容的来源）
+      events.push({ type: "response.reasoning_summary_text.delta", item_id: rid, output_index: outIdx, content_index: 0, delta: rtext });
+      // 3. part 完成
+      events.push({ type: "response.reasoning_summary_part.done", item_id: rid, output_index: outIdx, content_index: 0, summary: [{ type: "summary_text", text: rtext }] });
     }
     if (item.type === "message") {
       const textParts = (item.content || []).filter(c => c.type === "output_text" || c.type === "text");
