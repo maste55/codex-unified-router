@@ -221,6 +221,13 @@ function serializeResponsesSSE(resp, requestId) {
   for (const item of outEvents) {
     const copy = { ...item, id: item.id || ("evt_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6)) };
     events.push({ type: "response.output_item.added", output_index: events.filter(e => e.type === "response.output_item.added").length, item: copy });
+    if (item.type === "reasoning") {
+      // 思考过程专用事件（Codex 据此显示"思考中/思考过程"）
+      const rid = copy.id || ("rs_" + Date.now());
+      const rtext = (item.summary && item.summary[0]?.text) || (item.content && item.content[0]?.text) || "";
+      events.push({ type: "response.reasoning_summary.delta", item_id: rid, output_index: events.filter(e => e.type === "response.output_item.added").length - 1, summary: [{ type: "summary_text", text: rtext }] });
+      events.push({ type: "response.reasoning_summary.done", item_id: rid, output_index: events.filter(e => e.type === "response.output_item.added").length - 1, summary: [{ type: "summary_text", text: rtext }] });
+    }
     if (item.type === "message") {
       const textParts = (item.content || []).filter(c => c.type === "output_text" || c.type === "text");
       for (const tp of textParts) {
