@@ -16,6 +16,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 
 const HOME = os.homedir();
 const CODEX_HOME = path.join(HOME, ".codex");
@@ -24,6 +25,56 @@ const UNIFIED_MODELS = path.join(CODEX_HOME, "unified-models.json");
 const UPSTREAM = "https://chatgpt.com";
 const PORT = Number(process.env.BRIDGE_PORT || 17841);
 const HOST = process.env.BRIDGE_HOST || "127.0.0.1";
+
+// 多模型辅助：responses input 转 chat messages
+function convertInputToMessages(body) {
+  const msgs = [];
+  if (Array.isArray(body.input)) {
+    for (const item of body.input) {
+      if (item?.role === "user") {
+        const text = (item.content || []).map((c) => c?.text || "").join("") || String(item.content || "");
+        msgs.push({ role: "user", content: text });
+      } else if (item?.role === "assistant") {
+        const text = (item.content || []).map((c) => c?.text || "").join("") || "";
+        if (text) msgs.push({ role: "assistant", content: text });
+      }
+    }
+  }
+  return msgs;
+}
+function loadOpencodeGoKey() {
+  try {
+    const data = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".local", "share", "opencode", "auth.json"), "utf8"));
+    const v = data?.["opencode-go"] || data?.["opencode"];
+    if (v && typeof v === "object" && v.key) return v.key;
+    if (typeof v === "string") return v;
+  } catch {}
+  return process.env.OPENCODE_GO_API_KEY || "";
+}
+function loadDashScopeKey() {
+  try {
+    const data = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".local", "share", "opencode", "auth.json"), "utf8"));
+    const v = data?.["qwen"];
+    if (v && typeof v === "object" && v.key) return v.key;
+    if (typeof v === "string") return v;
+  } catch {}
+  return process.env.DASHSCOPE_API_KEY || "";
+}
+function loadKeymanKey(name) {
+  try {
+    const vault = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".codex", "keyman", "vault.json"), "utf8"));
+    const entry = vault?.keys?.[name];
+    if (entry?.enc) {
+      const ps = `
+Add-Type -AssemblyName System.Security;
+$enc = [Convert]::FromBase64String($env:KM_ENC);
+$bytes = [System.Security.Cryptography.ProtectedData]::Unprotect($enc, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser);
+[System.Text.Encoding]::UTF8.GetString($bytes)`;
+      return execFileSync("powershell.exe", ["-NoProfile", "-Command", ps], { env: { ...process.env, KM_ENC: entry.enc }, encoding: "utf8" }).trim();
+    }
+  } catch {}
+  return "";
+}
 
 function loadAuth() {
   const data = JSON.parse(fs.readFileSync(AUTH_FILE, "utf8"));
@@ -51,12 +102,19 @@ function authenticate(req) {
 }
 
 function officialModels() {
-  // 从 unified-models.json 取非 deepseek 模型（官方模型列表）
+  // 优先用 unified-models-catalog.json（Codex 兼容完整格式，含 shell_type）
+  const catalogPath = path.join(os.homedir(), ".codex", "unified-models-catalog.json");
+  try {
+    const cat = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
+    const models = (cat.models || []).filter((m) => m.slug);
+    if (models.length > 0) return models;
+  } catch (e) {
+    console.error(`[bridge] read catalog failed: ${e.message}`);
+  }
+  // 回退：unified-models.json（简化格式）
   try {
     const unified = JSON.parse(fs.readFileSync(UNIFIED_MODELS, "utf8"));
-    const models = (unified.models || []).filter(
-      (m) => m.slug && !m.slug.startsWith("deepseek-")
-    );
+    const models = (unified.models || []).filter((m) => m.slug);
     if (models.length > 0) return models;
   } catch (e) {
     console.error(`[bridge] read unified-models.json failed: ${e.message}`);
@@ -130,6 +188,70 @@ const server = http.createServer(async (req, res) => {
         body = JSON.parse(raw.toString("utf8"));
       } catch {
         return json(res, 400, { error: "Request body must be JSON" });
+      }
+
+      // 多模型路由：按 model 前缀分流
+      const reqModel = String(body.model || "");
+      const isOpencode = reqModel.startsWith("opencode-go/");
+      const isDash = reqModel.startsWith("qwen-dashscope/");
+      const isDeep = reqModel.startsWith("deepseek-");
+      let upstreamBase = UPSTREAM;
+      let upstreamPath = "/backend-api/codex/responses";
+      if (isOpencode) {
+        upstreamBase = "https://opencode.ai/zen/go/v1";
+        upstreamPath = "/chat/completions";
+        const goKey = loadOpencodeGoKey();
+        if (!goKey) return json(res, 500, { error: "opencode-go key unavailable" });
+        body.model = reqModel.replace("opencode-go/", "");
+        body.messages = convertInputToMessages(body);
+        body.stream = true;
+        delete body.store; delete body.instructions; delete body.max_output_tokens;
+        const up = await fetch(upstreamBase + upstreamPath, {
+          method: "POST",
+          headers: { authorization: "Bearer " + goKey, "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!up.ok) { const t = await up.text().catch(() => ""); return json(res, up.status, { error: t.slice(0, 300) }); }
+        res.writeHead(up.status, { "content-type": up.headers.get("content-type") || "application/json" });
+        const rd = up.body.getReader();
+        try { for (;;) { const { done, value } = await rd.read(); if (done) break; res.write(value); } } finally { rd.releaseLock(); }
+        return res.end();
+      }
+      if (isDash) {
+        upstreamBase = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+        upstreamPath = "/chat/completions";
+        const dsKey = loadDashScopeKey();
+        if (!dsKey) return json(res, 500, { error: "dashscope key unavailable" });
+        body.model = reqModel.replace("qwen-dashscope/", "");
+        body.messages = convertInputToMessages(body);
+        body.stream = true;
+        delete body.store; delete body.instructions; delete body.max_output_tokens;
+        const up = await fetch(upstreamBase + upstreamPath, {
+          method: "POST",
+          headers: { authorization: "Bearer " + dsKey, "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!up.ok) { const t = await up.text().catch(() => ""); return json(res, up.status, { error: t.slice(0, 300) }); }
+        res.writeHead(up.status, { "content-type": up.headers.get("content-type") || "application/json" });
+        const rd = up.body.getReader();
+        try { for (;;) { const { done, value } = await rd.read(); if (done) break; res.write(value); } } finally { rd.releaseLock(); }
+        return res.end();
+      }
+      if (isDeep) {
+        upstreamBase = "https://api.deepseek.com";
+        upstreamPath = "/responses";
+        const dsKey = loadKeymanKey("opencode:deepseek") || loadKeymanKey("env:DEEPSEEK_API_KEY") || loadKeymanKey("deepseek");
+        if (!dsKey) return json(res, 500, { error: "deepseek key unavailable" });
+        const up = await fetch(upstreamBase + upstreamPath, {
+          method: "POST",
+          headers: { authorization: "Bearer " + dsKey, "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!up.ok) { const t = await up.text().catch(() => ""); return json(res, up.status, { error: t.slice(0, 300) }); }
+        res.writeHead(up.status, { "content-type": up.headers.get("content-type") || "application/json" });
+        const rd = up.body.getReader();
+        try { for (;;) { const { done, value } = await rd.read(); if (done) break; res.write(value); } } finally { rd.releaseLock(); }
+        return res.end();
       }
 
       // 协议适配：backend-api 要求 stream=true + store=false
