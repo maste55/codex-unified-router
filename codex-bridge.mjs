@@ -44,15 +44,31 @@ function convertInputToMessages(body) {
   return msgs;
 }
 // 过滤工具：只保留 apply_patch（deepseek/dashscope 等上游不支持 exec/web_search 等自定义工具）
+// DeepSeek 官方工具支持（api-docs.deepseek.com）：
+// - function: 支持
+// - web_search: 支持（服务端执行）
+// - custom: 只支持 apply_patch
+// - exec_command 等 custom: 不支持（400）
 function filterTools(body) {
   if (Array.isArray(body.tools)) {
-    // 只保留 apply_patch，并转成 deepseek/OpenAI responses 兼容格式（name 在顶层）
-    const kept = body.tools.filter((tool) => {
-      const name = typeof tool === "string" ? tool : (tool?.function?.name || tool?.name || "");
-      return name === "apply_patch";
+    body.tools = body.tools.filter((tool) => {
+      if (typeof tool === "string") return tool === "apply_patch" || tool === "web_search";
+      const type = tool?.type || "";
+      const name = tool?.function?.name || tool?.name || "";
+      // 保留：function 类型 + web_search + apply_patch custom
+      if (type === "web_search") return true;
+      if (type === "function") return true;
+      if (type === "custom") return name === "apply_patch";
+      return true; // 其他类型（file_search 等）deepseek 会忽略
     });
-    body.tools = kept.map((tool) => {
-      if (typeof tool === "string") return { type: "function", name: tool, parameters: { type: "object", properties: {} } };
+    // 转 deepseek/OpenAI responses 兼容格式（function 的 name 提到顶层）
+    body.tools = body.tools.map((tool) => {
+      if (typeof tool === "string") {
+        return tool === "web_search" ? { type: "web_search" } : { type: "custom", name: "apply_patch" };
+      }
+      if (tool?.type === "function" && tool?.function?.name) {
+        return { type: "function", name: tool.function.name, parameters: tool.function.parameters || { type: "object", properties: {} } };
+      }
       if (tool?.function?.name) {
         return { type: "function", name: tool.function.name, parameters: tool.function.parameters || { type: "object", properties: {} } };
       }
