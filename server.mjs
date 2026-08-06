@@ -156,7 +156,7 @@ Add-Type -AssemblyName System.Security;
 $enc = [Convert]::FromBase64String($env:KM_ENC);
 $bytes = [System.Security.Cryptography.ProtectedData]::Unprotect($enc, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser);
 [System.Text.Encoding]::UTF8.GetString($bytes)`;
-    const out = _execFileSync("powershell.exe", ["-NoProfile", "-Command", ps], {
+    const out = execFileSync("powershell.exe", ["-NoProfile", "-Command", ps], {
       env: { ...process.env, KM_ENC: enc },
       encoding: "utf8", windowsHide: true,
     });
@@ -675,6 +675,34 @@ function maskKeyForPanel(k) {
   return k.slice(0, 6) + "..." + k.slice(-4);
 }
 
+// Key 友好名称与分组（人性化）
+const KEY_GROUPS = [
+  { id: "opencode-go", label: "opencode-go 订阅", icon: "🚀", match: ["opencode:opencode-go", "opencode:opencode"] },
+  { id: "dashscope", label: "阿里云 DashScope", icon: "☁️", match: ["opencode:qwen", "env:DASHSCOPE_API_KEY"] },
+  { id: "deepseek", label: "DeepSeek", icon: "🧠", match: ["opencode:deepseek", "opencode:deepseek1", "env:DEEPSEEK_API_KEY"] },
+  { id: "chatgpt", label: "ChatGPT 官方", icon: "💬", match: ["codex:chatgpt-access-token"] },
+  { id: "other", label: "其他", icon: "🔧", match: [] },
+];
+function friendlyKeyName(name) {
+  const map = {
+    "opencode:opencode-go": "opencode-go 订阅",
+    "opencode:opencode": "opencode-go 订阅",
+    "opencode:qwen": "阿里云 DashScope",
+    "env:DASHSCOPE_API_KEY": "阿里云 DashScope",
+    "opencode:deepseek": "DeepSeek",
+    "opencode:deepseek1": "DeepSeek",
+    "env:DEEPSEEK_API_KEY": "DeepSeek",
+    "codex:chatgpt-access-token": "ChatGPT 官方",
+  };
+  return map[name] || name;
+}
+function keyGroupOf(name) {
+  for (const g of KEY_GROUPS) {
+    if (g.match.includes(name)) return g.id;
+  }
+  return "other";
+}
+
 async function handleKeysList(req, res) {
   try {
     const vault = loadKeyVault();
@@ -682,9 +710,9 @@ async function handleKeysList(req, res) {
       const e = vault.keys[name];
       let masked = "***";
       try { masked = maskKeyForPanel(keymanDecrypt(e.enc)); } catch {}
-      return { name, desc: e.desc || "", masked, updated: e.updated || e.created || "" };
+      return { name, display: friendlyKeyName(name), group: keyGroupOf(name), desc: e.desc || "", masked, updated: e.updated || e.created || "" };
     });
-    return json(res, 200, { keys });
+    return json(res, 200, { keys, groups: KEY_GROUPS });
   } catch (e) { return json(res, 500, { error: e?.message || "failed" }); }
 }
 
@@ -703,6 +731,43 @@ async function handleKeysAdd(req, res) {
     saveKeyVault(vault);
     console.log(JSON.stringify({ event: "key_added", name }));
     return json(res, 200, { ok: true, name, masked: maskKeyForPanel(key) });
+  } catch (e) { return json(res, 500, { error: e?.message || "failed" }); }
+}
+
+// 测试 key：根据名称推断 provider 并实际调端点验证
+async function handleKeysTest(req, res) {
+  try {
+    const body = JSON.parse((await readBody(req)).toString("utf8"));
+    const name = body.name || "";
+    const vault = loadKeyVault();
+    const entry = vault.keys?.[name];
+    if (!entry) return json(res, 404, { error: "key not found" });
+    const key = keymanDecrypt(entry.enc);
+    let url = "", headers = { authorization: "Bearer " + key }, label = "";
+    if (name === "opencode:opencode-go" || name === "opencode:opencode") {
+      url = "https://opencode.ai/zen/go/v1/models";
+      label = "opencode-go";
+    } else if (name === "opencode:qwen" || name === "env:DASHSCOPE_API_KEY") {
+      url = "https://dashscope.aliyuncs.com/compatible-mode/v1/models";
+      label = "DashScope";
+    } else if (name.startsWith("opencode:deepseek")) {
+      url = "https://api.deepseek.com/models";
+      label = "DeepSeek";
+    } else if (name.startsWith("codex:")) {
+      url = "https://chatgpt.com/backend-api/codex/models?client_version=0.146.0";
+      label = "ChatGPT";
+      const acct = key.startsWith("eyJ") ? "1033af47-f84a-4c91-9094-e5eb3148ba32" : "";
+      if (acct) headers["chatgpt-account-id"] = acct;
+    } else {
+      // 其他（GLM/NOCOBASE/TAVILY 等）默认测试 dashscope 端点
+      url = "https://dashscope.aliyuncs.com/compatible-mode/v1/models";
+      label = "unknown";
+    }
+    const upstream = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });
+    let detail = "";
+    if (upstream.ok) detail = "连通正常";
+    else { try { const t = await upstream.text(); detail = t.slice(0, 120); } catch {} }
+    return json(res, upstream.ok ? 200 : 502, { ok: upstream.ok, label, status: upstream.status, detail });
   } catch (e) { return json(res, 500, { error: e?.message || "failed" }); }
 }
 
@@ -841,6 +906,9 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "DELETE" && url.pathname === "/panel/api/keys") {
     return handleKeysRemove(req, res);
+  }
+  if (req.method === "POST" && url.pathname === "/panel/api/keys/test") {
+    return handleKeysTest(req, res);
   }
   // 程序状态端点
   if (req.method === "GET" && url.pathname === "/panel/api/system") {

@@ -32,11 +32,10 @@ input:checked + .slider:before { transform:translateX(20px); }
 .actions .on { background:#4caf50; }
 .actions .off { background:#f44336; }
 .toast { position:fixed; bottom:20px; right:20px; background:#333; color:#fff; padding:10px 16px; border-radius:6px; display:none; font-size:13px; z-index:99; }
-/* Key 管理 */
 .key-form { background:#16213e; padding:16px; border-radius:8px; margin-bottom:16px; border:1px solid #222; }
-.key-form input { width:100%; padding:8px 12px; border-radius:6px; border:1px solid #333; background:#0f1a30; color:#e0e0e0; margin-bottom:10px; font-size:14px; }
+.key-form input, .key-form select { width:100%; padding:8px 12px; border-radius:6px; border:1px solid #333; background:#0f1a30; color:#e0e0e0; margin-bottom:10px; font-size:14px; }
 .key-form .row { display:flex; gap:10px; }
-.key-form .row input { flex:1; }
+.key-form .row input, .key-form .row select { flex:1; }
 .btn { padding:8px 18px; border:none; border-radius:6px; cursor:pointer; font-size:13px; color:#fff; }
 .btn-primary { background:#2196f3; }
 .btn-danger { background:#f44336; }
@@ -45,7 +44,6 @@ input:checked + .slider:before { transform:translateX(20px); }
 .key-item .kname { font-size:14px; color:#fff; font-weight:bold; }
 .key-item .kmasked { font-size:12px; color:#888; margin-top:2px; font-family:monospace; }
 .key-item .kdesc { font-size:11px; color:#666; margin-top:2px; }
-/* 程序管理 */
 .svc-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px; margin-bottom:20px; }
 .svc-card { background:#16213e; padding:16px; border-radius:8px; border:1px solid #222; }
 .svc-name { font-size:15px; color:#fff; font-weight:bold; margin-bottom:6px; }
@@ -69,7 +67,6 @@ input:checked + .slider:before { transform:translateX(20px); }
   <button class="tab" data-tab="system" onclick="switchTab('system')">⚙️ 程序管理</button>
 </div>
 
-<!-- Tab 1: 模型开关 -->
 <div class="tab-panel active" id="tab-models">
   <input class="search" id="search" placeholder="搜索模型名称...">
   <div class="summary" id="summary"></div>
@@ -80,21 +77,28 @@ input:checked + .slider:before { transform:translateX(20px); }
   </div>
 </div>
 
-<!-- Tab 2: API Key -->
 <div class="tab-panel" id="tab-keys">
   <div class="key-form">
     <div class="row">
-      <input id="keyName" placeholder="名称（如 openrouter:main）">
-      <input id="keyValue" placeholder="API Key（粘贴）" type="password">
+      <select id="keyGroup" onchange="groupChanged()">
+        <option value="opencode-go">🚀 opencode-go 订阅</option>
+        <option value="dashscope">☁️ 阿里云 DashScope</option>
+        <option value="deepseek">🧠 DeepSeek</option>
+        <option value="chatgpt">💬 ChatGPT 官方</option>
+        <option value="other">🔧 其他</option>
+      </select>
+      <input id="keyValue" placeholder="粘贴 API Key" type="password">
     </div>
-    <input id="keyDesc" placeholder="说明（可选，如：OpenRouter 主 key）">
-    <button class="btn btn-primary" onclick="addKey()">➕ 保存 Key</button>
+    <input id="keyDesc" placeholder="备注（可选）">
+    <div class="actions">
+      <button class="btn btn-primary" onclick="addKey()">💾 保存 Key</button>
+      <button class="btn" style="background:#ff9800" onclick="testKeyField()">🧪 测试 Key</button>
+    </div>
   </div>
   <div class="summary" id="keySummary"></div>
   <div id="keyList"></div>
 </div>
 
-<!-- Tab 3: 程序管理 -->
 <div class="tab-panel" id="tab-system">
   <div class="section-title">服务状态</div>
   <div class="svc-grid" id="svcGrid"></div>
@@ -118,8 +122,8 @@ function groupOf(slug) {
   return 3;
 }
 function switchTab(name) {
-  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
-  document.querySelectorAll(".tab-panel").forEach(p => p.classList.toggle("active", p.id === "tab-" + name));
+  document.querySelectorAll(".tab").forEach(function(t) { t.classList.toggle("active", t.dataset.tab === name); });
+  document.querySelectorAll(".tab-panel").forEach(function(p) { p.classList.toggle("active", p.id === "tab-" + name); });
   if (name === "keys") loadKeys();
   if (name === "system") loadSystem();
 }
@@ -136,13 +140,13 @@ async function load() {
 }
 function render() {
   const q = document.getElementById("search").value.toLowerCase();
-  const shown = MODELS.filter(m => m.slug.toLowerCase().includes(q));
-  const on = MODELS.filter(m => m.enabled).length;
+  const shown = MODELS.filter(function(m) { return m.slug.toLowerCase().includes(q); });
+  const on = MODELS.filter(function(m) { return m.enabled; }).length;
   document.getElementById("summary").textContent = "共 " + MODELS.length + " 个模型，当前显示 " + on + " 个";
   const list = document.getElementById("list");
   list.innerHTML = "";
   for (let g = 0; g < 4; g++) {
-    const real = shown.filter(m => groupOf(m.slug) === g);
+    const real = shown.filter(function(m) { return groupOf(m.slug) === g; });
     if (real.length === 0) continue;
     const div = document.createElement("div");
     div.className = "group-title";
@@ -177,8 +181,7 @@ async function toggle(slug, enabled) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ slug: slug, enabled: enabled }),
   });
-  const d = await r.json();
-  toast((enabled ? "显示: " : "隐藏: ") + slug + "（目录已更新，重启 Codex 生效）");
+  toast((enabled ? "显示: " : "隐藏: ") + slug + "（重启 Codex 生效）");
 }
 async function setAll(v) {
   for (const m of MODELS) {
@@ -195,38 +198,96 @@ async function setAll(v) {
 }
 document.getElementById("search").addEventListener("input", render);
 // ===== Key 管理 =====
+const GROUP_KEY_MAP = {
+  "opencode-go": "opencode:opencode-go",
+  "dashscope": "opencode:qwen",
+  "deepseek": "opencode:deepseek",
+  "chatgpt": "codex:chatgpt-access-token",
+};
+let KEY_DATA = { keys: [], groups: [] };
+function groupChanged() {
+  const g = document.getElementById("keyGroup").value;
+  const name = GROUP_KEY_MAP[g];
+  if (name) {
+    const existing = KEY_DATA.keys.find(function(k) { return k.name === name; });
+    if (existing) {
+      document.getElementById("keyValue").value = "";
+      document.getElementById("keyDesc").value = existing.desc || "";
+      document.getElementById("keyValue").placeholder = "当前: " + existing.masked + "（留空=不改）";
+    }
+  }
+}
 async function loadKeys() {
   const r = await fetch("/panel/api/keys");
-  const d = await r.json();
-  const keys = d.keys || [];
+  KEY_DATA = await r.json();
+  const keys = KEY_DATA.keys || [];
+  const groups = KEY_DATA.groups || [];
   document.getElementById("keySummary").textContent = "共 " + keys.length + " 个 key（DPAPI 加密存储）";
   const list = document.getElementById("keyList");
   list.innerHTML = "";
-  for (const k of keys) {
-    const row = document.createElement("div");
-    row.className = "key-item";
-    const info = document.createElement("div");
-    info.className = "info";
-    const nm = document.createElement("div");
-    nm.className = "kname"; nm.textContent = k.name;
-    const ms = document.createElement("div");
-    ms.className = "kmasked"; ms.textContent = k.masked;
-    const dc = document.createElement("div");
-    dc.className = "kdesc"; dc.textContent = k.desc || "";
-    info.appendChild(nm); info.appendChild(ms); info.appendChild(dc);
-    const del = document.createElement("button");
-    del.className = "btn btn-small btn-danger";
-    del.textContent = "删除";
-    del.onclick = function() { removeKey(k.name); };
-    row.appendChild(info); row.appendChild(del);
-    list.appendChild(row);
+  for (const g of groups) {
+    if (g.id === "other") continue;
+    const items = keys.filter(function(k) { return k.group === g.id; });
+    if (items.length === 0) continue;
+    const gdiv = document.createElement("div");
+    gdiv.className = "group-title";
+    gdiv.textContent = g.icon + " " + g.label + " (" + items.length + ")";
+    list.appendChild(gdiv);
+    for (const k of items) renderKeyItem(list, k);
+  }
+  const others = keys.filter(function(k) { return k.group === "other"; });
+  if (others.length) {
+    const gdiv = document.createElement("div");
+    gdiv.className = "group-title";
+    gdiv.textContent = "🔧 其他 (" + others.length + ")";
+    list.appendChild(gdiv);
+    for (const k of others) renderKeyItem(list, k);
   }
 }
+function renderKeyItem(list, k) {
+  const row = document.createElement("div");
+  row.className = "key-item";
+  const info = document.createElement("div");
+  info.className = "info";
+  const nm = document.createElement("div");
+  nm.className = "kname"; nm.textContent = k.display;
+  const ms = document.createElement("div");
+  ms.className = "kmasked"; ms.textContent = k.masked;
+  const dc = document.createElement("div");
+  dc.className = "kdesc"; dc.textContent = (k.desc || "") + (k.name !== k.display ? "  [" + k.name + "]" : "");
+  info.appendChild(nm); info.appendChild(ms); info.appendChild(dc);
+  const btns = document.createElement("div");
+  btns.style.display = "flex"; btns.style.gap = "6px";
+  const testB = document.createElement("button");
+  testB.className = "btn btn-small"; testB.textContent = "测试";
+  testB.style.background = "#ff9800";
+  testB.onclick = function() { testKey(k.name, testB); };
+  const editB = document.createElement("button");
+  editB.className = "btn btn-small"; editB.textContent = "修改";
+  editB.style.background = "#2196f3";
+  editB.onclick = function() { editKey(k); };
+  const delB = document.createElement("button");
+  delB.className = "btn btn-small btn-danger"; delB.textContent = "删除";
+  delB.onclick = function() { removeKey(k.name); };
+  btns.appendChild(testB); btns.appendChild(editB); btns.appendChild(delB);
+  row.appendChild(info); row.appendChild(btns);
+  list.appendChild(row);
+}
+function editKey(k) {
+  document.getElementById("keyGroup").value = k.group;
+  document.getElementById("keyValue").value = "";
+  document.getElementById("keyValue").placeholder = "当前: " + k.masked + "（留空=不改）";
+  document.getElementById("keyDesc").value = k.desc || "";
+  document.getElementById("keyValue").dataset.editName = k.name;
+  toast("修改模式: " + k.display + " — 粘贴新 Key 或直接保存更新备注");
+}
 async function addKey() {
-  const name = document.getElementById("keyName").value.trim();
+  const g = document.getElementById("keyGroup").value;
+  const editName = document.getElementById("keyValue").dataset.editName || "";
+  const name = editName || GROUP_KEY_MAP[g] || ("custom:" + Date.now());
   const key = document.getElementById("keyValue").value.trim();
   const desc = document.getElementById("keyDesc").value.trim();
-  if (!name || !key) { toast("请填写名称和 Key"); return; }
+  if (!key && !editName) { toast("请粘贴 API Key"); return; }
   const r = await fetch("/panel/api/keys", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -234,19 +295,45 @@ async function addKey() {
   });
   const d = await r.json();
   if (d.ok) {
-    toast("已保存: " + d.masked);
-    document.getElementById("keyName").value = "";
+    toast(editName ? "已更新: " + d.masked : "已保存: " + d.masked);
     document.getElementById("keyValue").value = "";
+    document.getElementById("keyValue").placeholder = "粘贴 API Key";
     document.getElementById("keyDesc").value = "";
+    delete document.getElementById("keyValue").dataset.editName;
     loadKeys();
   } else { toast("失败: " + (d.error || "unknown")); }
 }
 async function removeKey(name) {
-  if (!confirm("确定删除 key: " + name + " ？")) return;
+  if (!confirm("确定删除这个 Key ？")) return;
   const r = await fetch("/panel/api/keys?name=" + encodeURIComponent(name), { method: "DELETE" });
   const d = await r.json();
-  if (d.ok) { toast("已删除: " + name); loadKeys(); }
+  if (d.ok) { toast("已删除"); loadKeys(); }
   else { toast("失败: " + (d.error || "unknown")); }
+}
+async function testKey(name, btn) {
+  const orig = btn.textContent;
+  btn.textContent = "测试中..."; btn.disabled = true;
+  const r = await fetch("/panel/api/keys/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: name }),
+  });
+  const d = await r.json();
+  btn.textContent = orig; btn.disabled = false;
+  if (d.ok) toast("✅ " + (d.label || "") + " Key 有效（HTTP " + d.status + "）");
+  else toast("❌ " + (d.label || "") + " Key 无效（HTTP " + d.status + "）" + (d.detail ? " " + d.detail : ""));
+}
+async function testKeyField() {
+  const key = document.getElementById("keyValue").value.trim();
+  if (!key) { toast("先粘贴要测试的 Key"); return; }
+  const g = document.getElementById("keyGroup").value;
+  const name = GROUP_KEY_MAP[g] || "custom:test";
+  await fetch("/panel/api/keys", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name, key: key }) });
+  const r = await fetch("/panel/api/keys/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name }) });
+  const d = await r.json();
+  if (d.ok) toast("✅ " + (d.label || "") + " Key 有效（HTTP " + d.status + "）");
+  else toast("❌ " + (d.label || "") + " Key 无效（HTTP " + d.status + "）");
+  loadKeys();
 }
 // ===== 程序管理 =====
 async function loadSystem() {
@@ -279,7 +366,6 @@ async function restartRouter() {
   toast("router 正在重启，看门狗自动接管...");
   setTimeout(loadSystem, 3000);
 }
-// 启动
 load();
 </script>
 </body>
