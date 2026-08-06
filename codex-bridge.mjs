@@ -351,36 +351,48 @@ const server = http.createServer(async (req, res) => {
       return res.end();
     }
 
-    // POST /v1/responses/compact — 转发压缩
+    // POST /v1/responses/compact — 本地模拟成功（不依赖上游 compact 端点）
+    // Codex 期望响应含 1 个 type:"compaction" output 项；deepseek/官方 compact 端点不可靠
+    // （deepseek 404、官方受额度限制），改为本地构造合法响应，消除 Codex 报错/弹窗。
     if (req.method === "POST" && url.pathname === "/v1/responses/compact") {
       const raw = await readBody(req);
-      const upstream = await fetch(`${UPSTREAM}/backend-api/codex/responses/compact`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${accessToken}`,
-          "chatgpt-account-id": accountId,
-          "content-type": "application/json",
-          accept: "text/event-stream",
-        },
-        body: raw,
-      });
-      if (!upstream.ok) {
-        const text = await upstream.text().catch(() => "");
-        return json(res, upstream.status, { error: text || `upstream ${upstream.status}` });
-      }
-      res.writeHead(upstream.status, { "content-type": "application/json" });
-      const reader = upstream.body.getReader();
+      let reqBody = {};
       try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          res.write(value);
-        }
-      } finally {
-        reader.releaseLock();
+        const enc = (req.headers["content-encoding"] || "").toLowerCase();
+        const decoded = enc === "zstd" ? zstdDecompressSync(raw) : raw;
+        reqBody = JSON.parse(decoded.toString("utf8"));
+      } catch {}
+      // 提取最后一条用户消息作为保留项
+      const input = Array.isArray(reqBody.input) ? reqBody.input : [];
+      const lastUser = [...input].reverse().find((it) => it?.role === "user" || it?.type === "message" && it?.role === "user");
+      const retained = [];
+      if (lastUser) {
+        retained.push({
+          id: "msg_keep_" + Date.now(),
+          type: "message",
+          role: "user",
+          status: "completed",
+          content: lastUser.content || [{ type: "input_text", text: String(lastUser.text || "（对话已压缩）") }],
+        });
       }
-      return res.end();
+      // compaction 占位项（encrypted_content 为 opaque，Codex 不解析内容）
+      const compactItem = {
+        id: "cmp_" + Date.now(),
+        type: "compaction",
+        encrypted_content: Buffer.from("local-compaction-placeholder-" + Date.now()).toString("base64"),
+      };
+      retained.push(compactItem);
+      const resp = {
+        id: "resp_compact_" + Date.now(),
+        object: "response.compaction",
+        created_at: Math.floor(Date.now() / 1000),
+        output: retained,
+        usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      };
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify(resp));
     }
+
 
     return json(res, 404, { error: "Not found" });
   } catch (e) {
