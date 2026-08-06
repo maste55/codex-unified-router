@@ -10,6 +10,26 @@ import net from "node:net";
 import { zstdDecompressSync } from "node:zlib";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
+// 面板安全：token 复用已有文件（多进程不互相覆盖）+ 同源校验
+const PANEL_TOKEN_FILE = path.join(root, "panel-token.txt");
+let PANEL_TOKEN = "";
+try { PANEL_TOKEN = fs.readFileSync(PANEL_TOKEN_FILE, "utf8").trim(); } catch {}
+if (!PANEL_TOKEN) {
+  PANEL_TOKEN = crypto.randomBytes(24).toString("base64url");
+  fs.writeFileSync(PANEL_TOKEN_FILE, PANEL_TOKEN, { mode: 0o600 });
+}
+
+function panelAuthOk(req) {
+  const url = new URL(req.url, "http://127.0.0.1");
+  const origin = req.headers.origin || "";
+  // 同源校验：允许无 Origin（同标签页 fetch）或 127.0.0.1:4791
+  if (origin && !/^http:\/\/127\.0\.0\.1:4791$/.test(origin)) return false;
+  // token 校验：query 参数或 header
+  const qToken = url.searchParams.get("token");
+  const hToken = req.headers["x-panel-token"];
+  return qToken === PANEL_TOKEN || hToken === PANEL_TOKEN;
+}
+
 const config = JSON.parse(fs.readFileSync(path.join(root, "router.config.json"), "utf8"));
 const pidFile = path.join(root, "router.pid");
 
@@ -144,6 +164,8 @@ function opencodeGoHeaders(apiKey, source) {
   headers.delete("chatgpt-account-id");
   headers.delete("openai-project");
   headers.delete("openai-organization");
+  // body 已被 decodedBody 解压成明文，不能再带 content-encoding（否则上游解析失败）
+  headers.delete("content-encoding");
   return headers;
 }
 
@@ -245,9 +267,15 @@ function decodedBody(body, encoding = "") {
 }
 
 function sanitizeDeepSeekBody(body, encoding = "") {
-  const value = JSON.parse(decodedBody(body, encoding).toString("utf8"));
-  delete value.service_tier;
-  return Buffer.from(JSON.stringify(value));
+  try {
+    const value = JSON.parse(decodedBody(body, encoding).toString("utf8"));
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      delete value.service_tier;
+    }
+    return Buffer.from(JSON.stringify(value));
+  } catch {
+    return body;
+  }
 }
 
 function imageToText(imagePath) {
@@ -670,6 +698,11 @@ $enc = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, [Sys
     return out.trim();
   } catch { return ""; }
 }
+// DPAPI 加密且校验非空（返回 true 表示成功）
+function dpapiProtectChecked(plain) {
+  const enc = dpapiProtectForPanel(plain);
+  return enc && enc.length > 10 ? enc : "";
+}
 function maskKeyForPanel(k) {
   if (!k || k.length < 8) return "***";
   return k.slice(0, 6) + "..." + k.slice(-4);
@@ -723,13 +756,25 @@ async function handleKeysList(req, res) {
 async function handleKeysAdd(req, res) {
   try {
     const body = JSON.parse((await readBody(req)).toString("utf8"));
-    const { name, key, desc } = body;
-    if (!name || !key) return json(res, 400, { error: "name and key required" });
+    const { name, key, desc, keepKey } = body;
+    if (!name) return json(res, 400, { error: "name required" });
     const vault = loadKeyVault();
+    const existing = vault.keys?.[name];
+    // 编辑模式：keepKey=true 且 key 为空 → 保留原 key 只更新 desc
+    if (keepKey && !key && existing) {
+      existing.desc = desc || existing.desc || "";
+      existing.updated = new Date().toISOString();
+      saveKeyVault(vault);
+      console.log(JSON.stringify({ event: "key_updated_desc", name }));
+      return json(res, 200, { ok: true, name, masked: maskKeyForPanel(keymanDecrypt(existing.enc)) });
+    }
+    if (!key) return json(res, 400, { error: "key required (or use keepKey to update desc only)" });
+    const enc = dpapiProtectChecked(key);
+    if (!enc) return json(res, 500, { error: "DPAPI encryption failed" });
     vault.keys[name] = {
-      enc: dpapiProtectForPanel(key),
+      enc: enc,
       desc: desc || "",
-      created: vault.keys[name]?.created || new Date().toISOString(),
+      created: existing?.created || new Date().toISOString(),
       updated: new Date().toISOString(),
     };
     saveKeyVault(vault);
@@ -813,7 +858,7 @@ async function handleSystemStatus(req, res) {
       bridge: { port: 17841, up: bridge },
       ollama: { port: 11434, up: ollama },
       keys: Object.keys(vault.keys || {}).length,
-      models: { total: (unified.models || []).length, visible: Object.keys(vis).filter((k) => vis[k] !== false).length + (unified.models || []).filter((m) => !(m.slug in vis)).length, catalog: catalog.length },
+      models: { total: (unified.models || []).length, visible: (unified.models || []).filter((m) => vis[m.slug] !== false).length, catalog: catalog.length },
       pid_file: pidFile,
     });
   } catch (e) { return json(res, 500, { error: e?.message || "failed" }); }
@@ -834,7 +879,8 @@ async function handleSystemRestart(req, res) {
 const PANEL_FILE = path.join(root, "panel.html");
 function servePanel(res) {
   try {
-    const html = fs.readFileSync(PANEL_FILE, "utf8");
+    const html = fs.readFileSync(PANEL_FILE, "utf8")
+      .replace("__PANEL_TOKEN__", PANEL_TOKEN);
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end(html);
   } catch (e) {
@@ -894,6 +940,16 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && (url.pathname === "/v1/models" || url.pathname === "/models")) {
     return handleListModels(req, res, url);
   }
+  // 面板端点（全部需要 token 认证）
+  if (req.method === "GET" && (url.pathname === "/panel/api/models" || url.pathname === "/panel/api/keys" || url.pathname === "/panel/api/system")) {
+    if (!panelAuthOk(req)) return json(res, 401, { error: "Unauthorized" });
+  }
+  if (req.method === "POST" && (url.pathname === "/panel/api/toggle" || url.pathname === "/panel/api/keys" || url.pathname === "/panel/api/keys/test" || url.pathname === "/panel/api/system/restart")) {
+    if (!panelAuthOk(req)) return json(res, 401, { error: "Unauthorized" });
+  }
+  if (req.method === "DELETE" && url.pathname === "/panel/api/keys") {
+    if (!panelAuthOk(req)) return json(res, 401, { error: "Unauthorized" });
+  }
   // 面板端点
   if (req.method === "GET" && url.pathname === "/panel/api/models") {
     return handlePanelModels(req, res);
@@ -945,6 +1001,7 @@ server.on("upgrade", (req, socket) => {
 server.on("clientError", (_error, socket) => socket.end("HTTP/1.1 400 Bad Request\r\n\r\n"));
 server.listen(config.listenPort, config.listenHost, () => {
   fs.writeFileSync(pidFile, `${process.pid}\n`, "utf8");
+  try { regenerateCatalog(); } catch {}
   console.log(JSON.stringify({
     time: new Date().toISOString(), event: "started",
     host: config.listenHost, port: config.listenPort,

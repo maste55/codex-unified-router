@@ -113,11 +113,19 @@ input:checked + .slider:before { transform:translateX(20px); }
 <div class="toast" id="toast"></div>
 
 <script>
+const PANEL_TOKEN = "__PANEL_TOKEN__";
+async function apiFetch(url, opts) {
+  opts = opts || {};
+  opts.headers = opts.headers || {};
+  opts.headers["X-Panel-Token"] = PANEL_TOKEN;
+  const sep = url.includes("?") ? "&" : "?";
+  return fetch(url + sep + "token=" + PANEL_TOKEN, opts);
+}
 let MODELS = [];
 const LABELS = ["opencode-go 订阅", "阿里云 DashScope", "DeepSeek", "官方 ChatGPT"];
 function groupOf(slug) {
-  if (slug.startsWith("opencode-go/")) return 0;
-  if (slug.startsWith("qwen-dashscope/")) return 1;
+  if (slug.startsWith("opencode-go/") || slug.startsWith("opencode-go:")) return 0;
+  if (slug.startsWith("qwen-dashscope/") || slug.startsWith("qwen-dashscope:")) return 1;
   if (slug.startsWith("deepseek-")) return 2;
   return 3;
 }
@@ -134,7 +142,7 @@ function toast(msg) {
 }
 // ===== 模型 =====
 async function load() {
-  const r = await fetch("/panel/api/models");
+  const r = await apiFetch("/panel/api/models");
   MODELS = (await r.json()).models || [];
   render();
 }
@@ -176,7 +184,7 @@ function render() {
   }
 }
 async function toggle(slug, enabled) {
-  const r = await fetch("/panel/api/toggle", {
+  const r = await apiFetch("/panel/api/toggle", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ slug: slug, enabled: enabled }),
@@ -186,7 +194,7 @@ async function toggle(slug, enabled) {
 async function setAll(v) {
   for (const m of MODELS) {
     if (m.enabled !== v) {
-      await fetch("/panel/api/toggle", {
+      await apiFetch("/panel/api/toggle", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ slug: m.slug, enabled: v }),
@@ -218,7 +226,7 @@ function groupChanged() {
   }
 }
 async function loadKeys() {
-  const r = await fetch("/panel/api/keys");
+  const r = await apiFetch("/panel/api/keys");
   KEY_DATA = await r.json();
   const keys = KEY_DATA.keys || [];
   const groups = KEY_DATA.groups || [];
@@ -302,10 +310,13 @@ async function addKey() {
   const key = document.getElementById("keyValue").value.trim();
   const desc = document.getElementById("keyDesc").value.trim();
   if (!key && !editName) { toast("请粘贴 API Key"); return; }
-  const r = await fetch("/panel/api/keys", {
+  if (editName && !key) {
+    // 编辑模式：key 留空 = 只更新 desc，需要后端支持（后端已有逻辑：空 key 时保留原值）
+  }
+  const r = await apiFetch("/panel/api/keys", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: name, key: key, desc: desc }),
+    body: JSON.stringify({ name: name, key: key, desc: desc, keepKey: editName && !key }),
   });
   const d = await r.json();
   if (d.ok) {
@@ -319,7 +330,7 @@ async function addKey() {
 }
 async function removeKey(name) {
   if (!confirm("确定删除这个 Key ？")) return;
-  const r = await fetch("/panel/api/keys?name=" + encodeURIComponent(name), { method: "DELETE" });
+  const r = await apiFetch("/panel/api/keys?name=" + encodeURIComponent(name), { method: "DELETE" });
   const d = await r.json();
   if (d.ok) { toast("已删除"); loadKeys(); }
   else { toast("失败: " + (d.error || "unknown")); }
@@ -327,7 +338,7 @@ async function removeKey(name) {
 async function testKey(name, btn) {
   const orig = btn.textContent;
   btn.textContent = "测试中..."; btn.disabled = true;
-  const r = await fetch("/panel/api/keys/test", {
+  const r = await apiFetch("/panel/api/keys/test", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name: name }),
@@ -341,17 +352,21 @@ async function testKeyField() {
   const key = document.getElementById("keyValue").value.trim();
   if (!key) { toast("先粘贴要测试的 Key"); return; }
   const g = document.getElementById("keyGroup").value;
-  const name = GROUP_KEY_MAP[g] || "custom:test";
-  await fetch("/panel/api/keys", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name, key: key }) });
-  const r = await fetch("/panel/api/keys/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name }) });
+  const tempName = "panel:temp-test-" + Date.now();
+  // 存到临时名（不覆盖原 key）
+  const s = await apiFetch("/panel/api/keys", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: tempName, key: key }) });
+  const sd = await s.json();
+  if (!sd.ok) { toast("保存测试 Key 失败: " + (sd.error || "")); return; }
+  const r = await apiFetch("/panel/api/keys/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: tempName }) });
   const d = await r.json();
-  if (d.ok) toast("✅ " + (d.label || "") + " Key 有效（HTTP " + d.status + "）");
-  else toast("❌ " + (d.label || "") + " Key 无效（HTTP " + d.status + "）");
-  loadKeys();
+  // 删掉临时 key（无论成败）
+  await apiFetch("/panel/api/keys?name=" + encodeURIComponent(tempName), { method: "DELETE" });
+  if (d.ok) toast("✅ " + (d.label || "") + " Key 有效（HTTP " + d.status + "），点保存入库");
+  else toast("❌ " + (d.label || "") + " Key 无效（HTTP " + d.status + "）" + (d.detail ? " " + d.detail : ""));
 }
 // ===== 程序管理 =====
 async function loadSystem() {
-  const r = await fetch("/panel/api/system");
+  const r = await apiFetch("/panel/api/system");
   const d = await r.json();
   const grid = document.getElementById("svcGrid");
   grid.innerHTML = "";
@@ -376,7 +391,7 @@ async function loadSystem() {
 }
 async function restartRouter() {
   if (!confirm("重启 unified-router？看门狗会自动拉起。")) return;
-  await fetch("/panel/api/system/restart", { method: "POST" });
+  await apiFetch("/panel/api/system/restart", { method: "POST" });
   toast("router 正在重启，看门狗自动接管...");
   setTimeout(loadSystem, 3000);
 }
