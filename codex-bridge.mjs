@@ -16,6 +16,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
+import { zstdDecompressSync } from "node:zlib";
 import { execFileSync } from "node:child_process";
 
 const HOME = os.homedir();
@@ -196,9 +197,12 @@ const server = http.createServer(async (req, res) => {
       const raw = await readBody(req);
       let body;
       try {
-        body = JSON.parse(raw.toString("utf8"));
-      } catch {
-        return json(res, 400, { error: "Request body must be JSON" });
+        // 处理 zstd 压缩的请求体（Codex 标准压缩方式）
+        const enc = (req.headers["content-encoding"] || "").toLowerCase();
+        const decoded = enc === "zstd" ? zstdDecompressSync(raw) : raw;
+        body = JSON.parse(decoded.toString("utf8"));
+      } catch (e) {
+        return json(res, 400, { error: "Request body must be JSON (zstd handled): " + (e?.message || "") });
       }
 
       // 多模型路由：按 model 前缀分流
