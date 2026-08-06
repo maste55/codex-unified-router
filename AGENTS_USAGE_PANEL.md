@@ -2,9 +2,7 @@
 
 ## 背景
 
-本机 DeepSeek 消费面板（tkinter 置顶悬浮小窗）已启用**强制置顶**：
-`_poll` 循环每 1.5 秒执行 `SetWindowPos(HWND_TOPMOST)`，即使 Codex 全屏/抢焦点，
-面板始终在 Codex 窗口上层。
+本机 DeepSeek 消费面板（tkinter 置顶悬浮小窗，pinned=true 置顶）。
 
 ## Codex 全局指令（追加到 `~/.codex/AGENTS.md`）
 
@@ -15,6 +13,9 @@
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\.codex\skills\deepseek-usage-panel\scripts\usage-panel.ps1" -Action start
    ```
+
+   > 启动内部使用 `explorer.exe` 方式，确保面板进入用户桌面会话（Session 1），窗口正常显示。
+   > 不要用 `Start-Process pythonw` 直接启动（会进入非交互上下文，面板不定时静默退出）。
    - `-Action start`：启动（若未运行）
    - `-Action status`：只读查询状态（panel/pid/balance_cny/today_usd/week_usd）
    - `-Action stop`：停止面板
