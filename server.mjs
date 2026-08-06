@@ -198,6 +198,33 @@ function convertChatToResponses(chatBody, model) {
   return { id: chatBody?.id || ("resp_" + Date.now()), object: "response", created_at: chatBody?.created || Math.floor(Date.now() / 1000), status: "completed", model: model || chatBody?.model || "", output, usage: chatBody?.usage || { input_tokens: 0, output_tokens: 0, total_tokens: 0 } };
 }
 
+function serializeResponsesSSE(resp, requestId) {
+  // 将 Responses JSON 转成 OpenAI 兼容 SSE 事件流（Codex 期望的格式）
+  const events = [];
+  const outEvents = resp.output || [];
+  // 1. response.created
+  events.push({ type: "response.created", response: { id: resp.id, object: "response", created_at: resp.created_at, status: "in_progress", model: resp.model, output: [], usage: null } });
+  // 2. output_item.added + content 增量（reasoning 和 message 分事件）
+  for (const item of outEvents) {
+    const copy = { ...item, id: item.id || ("evt_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6)) };
+    events.push({ type: "response.output_item.added", output_index: events.filter(e => e.type === "response.output_item.added").length, item: copy });
+    if (item.type === "message") {
+      const textParts = (item.content || []).filter(c => c.type === "output_text" || c.type === "text");
+      for (const tp of textParts) {
+        events.push({ type: "response.content_part.added", item_id: copy.id, output_index: events.filter(e => e.type === "response.output_item.added").length - 1, content_index: 0, part: { type: "output_text", text: tp.text || "", annotations: [] } });
+        events.push({ type: "response.output_text.delta", item_id: copy.id, output_index: events.filter(e => e.type === "response.output_item.added").length - 1, content_index: 0, delta: tp.text || "" });
+        events.push({ type: "response.output_text.done", item_id: copy.id, output_index: events.filter(e => e.type === "response.output_item.added").length - 1, content_index: 0, text: tp.text || "" });
+      }
+      events.push({ type: "response.content_part.done", item_id: copy.id, output_index: events.filter(e => e.type === "response.output_item.added").length - 1, content_index: 0, part: { type: "output_text", text: textParts.map(t => t.text || "").join(""), annotations: [] } });
+    }
+    events.push({ type: "response.output_item.done", output_index: events.filter(e => e.type === "response.output_item.added").length - 1, item: copy });
+  }
+  // 3. response.completed（Codex 等待的结束事件）
+  events.push({ type: "response.completed", response: resp });
+  return events.map(ev => "data: " + JSON.stringify(ev) + "\n\n").join("") + "data: [DONE]\n\n";
+}
+
+
 function safeModel(body, encoding = "") {
   try {
     const value = JSON.parse(decodedBody(body, encoding).toString("utf8"));
@@ -372,9 +399,21 @@ async function proxy(req, res) {
       try {
         const chatResp = JSON.parse(rawText);
         const resp = convertChatToResponses(chatResp, model);
-        res.setHeader("content-type", "application/json");
-        res.end(JSON.stringify(resp));
-        console.log(JSON.stringify({ time: new Date().toISOString(), route, model, status, durationMs: Date.now() - started, converted: true }));
+        // 检测 Codex 是否请求流式（SSE）；是则返回 SSE 事件流
+        let wantStream = false;
+        try {
+          const reqParsed = JSON.parse(decodedBody(incomingBody, incomingEncoding).toString("utf8"));
+          wantStream = reqParsed.stream === true || reqParsed.stream === "true";
+        } catch {}
+        if (wantStream) {
+          res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+          res.write(serializeResponsesSSE(resp, model));
+          res.end();
+        } else {
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify(resp));
+        }
+        console.log(JSON.stringify({ time: new Date().toISOString(), route, model, status, durationMs: Date.now() - started, converted: true, stream: wantStream }));
         return;
       } catch (e) {
         console.error(JSON.stringify({ event: "chat_convert_fail", error: e?.message || String(e) }));
