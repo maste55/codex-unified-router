@@ -101,6 +101,85 @@ function deepSeekHeaders(apiKey, source) {
   return headers;
 }
 
+// opencode-go 路由辅助：读本地 opencode auth.json 的 key
+function extractApiKey(value) {
+  // opencode auth.json 格式：{"type":"api","key":"sk-..."} 或直接字符串
+  if (typeof value === "string") return value.length > 10 ? value : "";
+  if (value && typeof value === "object") {
+    const k = value.key || value.apiKey || value.token;
+    if (typeof k === "string" && k.length > 10) return k;
+  }
+  return "";
+}
+
+function loadOpencodeGoKey() {
+  const candidates = [
+    path.join(os.homedir(), ".local", "share", "opencode", "auth.json"),
+    path.join(os.homedir(), ".config", "opencode", "auth.json"),
+  ];
+  for (const f of candidates) {
+    try {
+      const data = JSON.parse(fs.readFileSync(f, "utf8"));
+      const key = extractApiKey(data?.["opencode-go"])
+        || extractApiKey(data?.["opencode"])
+        || extractApiKey(data?.["opencode_go"]);
+      if (key) return key;
+    } catch {}
+  }
+  // 环境变量兜底
+  return process.env.OPENCODE_GO_API_KEY || process.env.OPENCODE_API_KEY || "";
+}
+
+function opencodeGoHeaders(apiKey, source) {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(source)) {
+    if (value == null || hopByHop.has(name.toLowerCase())) continue;
+    headers.set(name, Array.isArray(value) ? value.join(", ") : value);
+  }
+  headers.set("authorization", `Bearer ${apiKey}`);
+  headers.delete("chatgpt-account-id");
+  headers.delete("openai-project");
+  headers.delete("openai-organization");
+  return headers;
+}
+
+// opencode-go body 清洗：模型名去前缀 + 转换 responses 格式为 chat/completions
+function sanitizeOpencodeGoBody(body, encoding = "") {
+  try {
+    const parsed = JSON.parse(decodedBody(body, encoding).toString("utf8"));
+    if (parsed.model) {
+      parsed.model = String(parsed.model).replace(/^opencode-go\//, "").replace(/^opencode-go:/, "");
+    }
+    // 若请求是 responses 格式，转成 chat/completions 格式
+    if (Array.isArray(parsed.input) && !parsed.messages) {
+      const messages = [];
+      for (const item of parsed.input) {
+        if (item?.role === "user") {
+          const text = (item.content || []).map((c) => c?.text || "").join("") || String(item.content || "");
+          messages.push({ role: "user", content: text });
+        } else if (item?.role === "assistant") {
+          messages.push({ role: "assistant", content: (item.content || []).map((c) => c?.text || "").join("") || "" });
+        }
+      }
+      if (messages.length) {
+        parsed.messages = messages;
+        parsed.stream = parsed.stream === true;
+        delete parsed.input;
+        delete parsed.instructions;
+        delete parsed.tools;
+        delete parsed.tool_choice;
+        delete parsed.parallel_tool_calls;
+        delete parsed.reasoning;
+        delete parsed.store;
+        if (!parsed.max_tokens) delete parsed.max_output_tokens;
+      }
+    }
+    return Buffer.from(JSON.stringify(parsed));
+  } catch {
+    return body;
+  }
+}
+
 function normalizedUpstreamPath(requestUrl) {
   const url = new URL(requestUrl, "http://127.0.0.1");
   let pathname = url.pathname;
@@ -325,7 +404,8 @@ async function proxy(req, res) {
     }
 
     const isDeepSeek = model.startsWith("deepseek-");
-    route = isDeepSeek ? "deepseek" : "openai";
+    const isOpencodeGo = model.startsWith("opencode-go/") || model.startsWith("opencode-go:") || model.startsWith("opencode-");
+    route = isDeepSeek ? "deepseek" : (isOpencodeGo ? "opencode-go" : "openai");
     let body = incomingBody;
     let headers;
     let baseUrl;
@@ -337,12 +417,21 @@ async function proxy(req, res) {
       body = convertImagesToText(body);
       headers = deepSeekHeaders(env.AI_API_KEY, req.headers);
       baseUrl = config.deepseekBaseUrl;
+    } else if (isOpencodeGo) {
+      const goKey = loadOpencodeGoKey();
+      if (!goKey) throw new Error("Opencode Go API key is unavailable (check ~/.local/share/opencode/auth.json)");
+      headers = opencodeGoHeaders(goKey, req.headers);
+      baseUrl = config.opencodeGoBaseUrl || "https://opencode.ai/zen/go/v1";
+      // opencode-go 端点只接受 chat/completions + 无前缀模型名
+      body = sanitizeOpencodeGoBody(incomingBody, incomingEncoding);
+      req.routerPathOverride = "chat/completions";
     } else {
       headers = copyOpenAIHeaders(req.headers, auth);
       baseUrl = config.openaiBaseUrl;
     }
 
-    const upstreamUrl = new URL(`${baseUrl.replace(/\/$/, "")}/${normalizedUpstreamPath(req.url).replace(/^\//, "")}`);
+    const upstreamPath = req.routerPathOverride || normalizedUpstreamPath(req.url).replace(/^\//, "");
+    const upstreamUrl = new URL(`${baseUrl.replace(/\/$/, "")}/${upstreamPath}`);
     const upstream = await fetch(upstreamUrl, {
       method: req.method,
       headers,
@@ -397,15 +486,17 @@ async function handleListModels(req, res, url) {
     } catch (error) {
       console.error(JSON.stringify({ event: "list_models_upstream_unavailable", error: error?.message || "failed" }));
     }
-    // 合并 deepseek 模型（从 unified-models.json 读取）
-    let deepseekModels = [];
+    // 合并 deepseek + opencode-go 模型（从 unified-models.json 读取）
+    let extraModels = [];
     try {
       const unifiedPath = path.join(root, "..", "unified-models.json");
       const unified = JSON.parse(fs.readFileSync(unifiedPath, "utf8"));
-      deepseekModels = (unified.models || []).filter((m) => m.slug && m.slug.startsWith("deepseek-"));
+      extraModels = (unified.models || []).filter(
+        (m) => m.slug && (m.slug.startsWith("deepseek-") || m.slug.startsWith("opencode-"))
+      );
     } catch {}
     const seen = new Set(openaiModels.map((m) => m.slug));
-    const merged = [...openaiModels, ...deepseekModels.filter((m) => !seen.has(m.slug))];
+    const merged = [...openaiModels, ...extraModels.filter((m) => !seen.has(m.slug))];
     return json(res, 200, { models: merged });
   } catch (error) {
     console.error(JSON.stringify({ event: "list_models_error", error: error?.message || "failed" }));
