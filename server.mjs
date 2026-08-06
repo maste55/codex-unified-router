@@ -219,7 +219,9 @@ function serializeResponsesSSE(resp, requestId) {
   events.push({ type: "response.created", response: { id: resp.id, object: "response", created_at: resp.created_at, status: "in_progress", model: resp.model, output: [], usage: null } });
   // 2. output_item.added + content 增量（reasoning 和 message 分事件）
   for (const item of outEvents) {
-    const copy = { ...item, id: item.id || ("evt_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6)) };
+    // 关键：item 必须有稳定的 id，后续事件 item_id 必须与此一致（Codex TUI 依赖关联）
+    const stableId = item.id || (item.type === "reasoning" ? "rs_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6) : "msg_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6));
+    const copy = { ...item, id: stableId };
     events.push({ type: "response.output_item.added", output_index: events.filter(e => e.type === "response.output_item.added").length, item: copy });
     if (item.type === "reasoning") {
       // 思考过程专用事件：完整文本(reasoning_text) + 摘要(summary_text) 双通道
@@ -364,6 +366,10 @@ async function proxy(req, res) {
     const incomingBody = await readBody(req);
     const incomingEncoding = req.headers["content-encoding"] || "";
     model = safeModel(incomingBody, incomingEncoding);
+    try {
+      const dbg = JSON.parse(decodedBody(incomingBody, incomingEncoding).toString("utf8"));
+      console.error(JSON.stringify({ event: "req_dump", model, keys: Object.keys(dbg), reasoning: dbg.reasoning, reasoning_effort: dbg.reasoning_effort, stream: dbg.stream, has_input: Array.isArray(dbg.input) ? dbg.input.length : typeof dbg.input }));
+    } catch {}
     if (model && !model.startsWith("deepseek-")) {
       console.error(JSON.stringify({ event: "openai_request_headers", names: Object.keys(req.headers).sort() }));
     }
