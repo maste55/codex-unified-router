@@ -231,7 +231,20 @@ async function loadKeys() {
     if (items.length === 0) continue;
     const gdiv = document.createElement("div");
     gdiv.className = "group-title";
-    gdiv.textContent = g.icon + " " + g.label + " (" + items.length + ")";
+    gdiv.style.display = "flex";
+    gdiv.style.alignItems = "center";
+    gdiv.style.justifyContent = "space-between";
+    const gl = document.createElement("span");
+    gl.textContent = g.icon + " " + g.label + " (" + items.length + ")" + (g.typeNote ? "  ·  " + g.typeNote : "");
+    gdiv.appendChild(gl);
+    if (g.renewUrl) {
+      const rb = document.createElement("a");
+      rb.href = g.renewUrl; rb.target = "_blank";
+      rb.textContent = "💰 " + (g.renewLabel || "续费");
+      rb.style.cssText = "font-size:12px;color:#ffd54f;text-decoration:none;border:1px solid #ffd54f;padding:3px 10px;border-radius:4px;";
+      rb.onclick = function() { toast("已跳转 " + g.label + " 官网"); };
+      gdiv.appendChild(rb);
+    }
     list.appendChild(gdiv);
     for (const k of items) renderKeyItem(list, k);
   }
@@ -254,7 +267,8 @@ function renderKeyItem(list, k) {
   const ms = document.createElement("div");
   ms.className = "kmasked"; ms.textContent = k.masked;
   const dc = document.createElement("div");
-  dc.className = "kdesc"; dc.textContent = (k.desc || "") + (k.name !== k.display ? "  [" + k.name + "]" : "");
+  dc.className = "kdesc";
+  dc.textContent = (k.typeTag ? "[" + k.typeTag + "]  " : "") + (k.desc || "") + (k.name !== k.display ? "  [" + k.name + "]" : "");
   info.appendChild(nm); info.appendChild(ms); info.appendChild(dc);
   const btns = document.createElement("div");
   btns.style.display = "flex"; btns.style.gap = "6px";

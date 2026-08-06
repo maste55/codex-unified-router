@@ -677,11 +677,11 @@ function maskKeyForPanel(k) {
 
 // Key 友好名称与分组（人性化）
 const KEY_GROUPS = [
-  { id: "opencode-go", label: "opencode-go 订阅", icon: "🚀", match: ["opencode:opencode-go", "opencode:opencode"] },
-  { id: "dashscope", label: "阿里云 DashScope", icon: "☁️", match: ["opencode:qwen", "env:DASHSCOPE_API_KEY"] },
-  { id: "deepseek", label: "DeepSeek", icon: "🧠", match: ["opencode:deepseek", "opencode:deepseek1", "env:DEEPSEEK_API_KEY"] },
-  { id: "chatgpt", label: "ChatGPT 官方", icon: "💬", match: ["codex:chatgpt-access-token"] },
-  { id: "other", label: "其他", icon: "🔧", match: [] },
+  { id: "opencode-go", label: "opencode-go 订阅", icon: "🚀", match: ["opencode:opencode-go", "opencode:opencode"], renewUrl: "https://opencode.ai/go", renewLabel: "续费/订阅", typeNote: "按月订阅" },
+  { id: "dashscope", label: "阿里云 DashScope", icon: "☁️", match: ["opencode:qwen", "env:DASHSCOPE_API_KEY"], renewUrl: "https://bailian.console.aliyun.com/", renewLabel: "百炼控制台", typeNote: "百炼 token / 普通" },
+  { id: "deepseek", label: "DeepSeek", icon: "🧠", match: ["opencode:deepseek", "opencode:deepseek1", "env:DEEPSEEK_API_KEY"], renewUrl: "https://platform.deepseek.com/top_up", renewLabel: "充值", typeNote: "按量付费" },
+  { id: "chatgpt", label: "ChatGPT 官方", icon: "💬", match: ["codex:chatgpt-access-token"], renewUrl: "https://chatgpt.com/", renewLabel: "登录", typeNote: "账号登录" },
+  { id: "other", label: "其他", icon: "🔧", match: [], renewUrl: "", renewLabel: "", typeNote: "" },
 ];
 function friendlyKeyName(name) {
   const map = {
@@ -710,7 +710,11 @@ async function handleKeysList(req, res) {
       const e = vault.keys[name];
       let masked = "***";
       try { masked = maskKeyForPanel(keymanDecrypt(e.enc)); } catch {}
-      return { name, display: friendlyKeyName(name), group: keyGroupOf(name), desc: e.desc || "", masked, updated: e.updated || e.created || "" };
+      let typeTag = "";
+      if (name === "opencode:qwen") typeTag = "百炼 token";
+      else if (name === "env:DASHSCOPE_API_KEY") typeTag = "环境变量";
+      else if (name === "opencode:deepseek" || name === "opencode:deepseek1") typeTag = "API key";
+      return { name, display: friendlyKeyName(name), group: keyGroupOf(name), desc: e.desc || "", masked, typeTag, updated: e.updated || e.created || "" };
     });
     return json(res, 200, { keys, groups: KEY_GROUPS });
   } catch (e) { return json(res, 500, { error: e?.message || "failed" }); }
