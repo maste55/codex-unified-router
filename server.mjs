@@ -1051,7 +1051,34 @@ const server = http.createServer(async (req, res) => {
       deepseek: "deepseek-* model ids",
     });
   }
-  if (req.method !== "POST") return json(res, 405, { error: "Method not allowed" });
+  // 非 POST 请求（GET/PUT/DELETE）：会话列表/线程等走 bridge（官方通道），不 405 拦截
+  if (req.method !== "POST") {
+    try {
+      const { valid, auth } = authenticate(req);
+      if (!valid) return json(res, 401, { error: "Local router authentication failed" });
+      const headers = copyOpenAIHeaders(req.headers, auth);
+      const upstreamUrl = new URL(`${config.openaiBaseUrl.replace(/\/$/, "")}/${normalizedUpstreamPath(req.url).replace(/^\//, "")}`);
+      const upstream = await fetch(upstreamUrl, {
+        method: req.method,
+        headers,
+        body: req.method === "GET" || req.method === "HEAD" || req.method === "DELETE" ? undefined : await readBody(req),
+        redirect: "manual",
+      });
+      res.statusCode = upstream.status;
+      copyResponseHeaders(upstream, res);
+      if (upstream.body) {
+        const stream = Readable.fromWeb(upstream.body);
+        stream.on("error", (e) => { if (!res.headersSent) res.destroy(e); });
+        stream.pipe(res);
+      } else {
+        res.end();
+      }
+      return;
+    } catch (e) {
+      if (!res.headersSent) return json(res, 502, { error: e?.message || "upstream failed" });
+      return res.end();
+    }
+  }
   return proxy(req, res);
 });
 
