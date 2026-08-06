@@ -101,12 +101,23 @@ function authenticate(req) {
   }
 }
 
+// 面板可见性：读取 model-visibility.json（与 unified-router 共用）
+const VISIBILITY_FILE = path.join(os.homedir(), ".codex", "unified-router", "model-visibility.json");
+function loadVisibility() {
+  try { return JSON.parse(fs.readFileSync(VISIBILITY_FILE, "utf8")); }
+  catch { return {}; }
+}
+function isModelVisible(slug) {
+  const v = loadVisibility();
+  return v[slug] !== false; // 默认可见
+}
+
 function officialModels() {
-  // 优先用 unified-models-catalog.json（Codex 兼容完整格式，含 shell_type）
+  // 优先用 unified-models-catalog.json（Codex 兼容完整格式，含 shell_type），按面板可见性过滤
   const catalogPath = path.join(os.homedir(), ".codex", "unified-models-catalog.json");
   try {
     const cat = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
-    const models = (cat.models || []).filter((m) => m.slug);
+    const models = (cat.models || []).filter((m) => m.slug && isModelVisible(m.slug));
     if (models.length > 0) return models;
   } catch (e) {
     console.error(`[bridge] read catalog failed: ${e.message}`);
