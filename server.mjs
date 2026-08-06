@@ -143,12 +143,34 @@ function opencodeGoHeaders(apiKey, source) {
   return headers;
 }
 
+// DashScope key：从 opencode auth.json 的 qwen 字段读
+function loadDashScopeKey() {
+  const candidates = [
+    path.join(os.homedir(), ".local", "share", "opencode", "auth.json"),
+    path.join(os.homedir(), ".config", "opencode", "auth.json"),
+  ];
+  for (const f of candidates) {
+    try {
+      const data = JSON.parse(fs.readFileSync(f, "utf8"));
+      const key = extractApiKey(data?.["qwen"]) || extractApiKey(data?.["dashscope"]);
+      if (key) return key;
+    } catch {}
+  }
+  return process.env.DASHSCOPE_API_KEY || "";
+}
+
 // opencode-go body 清洗：模型名去前缀 + 转换 responses 格式为 chat/completions
 function sanitizeOpencodeGoBody(body, encoding = "") {
   try {
     const parsed = JSON.parse(decodedBody(body, encoding).toString("utf8"));
     if (parsed.model) {
-      parsed.model = String(parsed.model).replace(/^opencode-go\//, "").replace(/^opencode-go:/, "");
+      // 去掉所有网关前缀（opencode-go/、qwen-dashscope/、dashscope/ 等）
+      parsed.model = String(parsed.model)
+        .replace(/^opencode-go\//, "")
+        .replace(/^opencode-go:/, "")
+        .replace(/^qwen-dashscope\//, "")
+        .replace(/^qwen-dashscope:/, "")
+        .replace(/^dashscope\//, "");
     }
     // 若请求是 responses 格式，转成 chat/completions 格式
     if (Array.isArray(parsed.input) && !parsed.messages) {
@@ -405,7 +427,8 @@ async function proxy(req, res) {
 
     const isDeepSeek = model.startsWith("deepseek-");
     const isOpencodeGo = model.startsWith("opencode-go/") || model.startsWith("opencode-go:") || model.startsWith("opencode-");
-    route = isDeepSeek ? "deepseek" : (isOpencodeGo ? "opencode-go" : "openai");
+    const isDashScope = model.startsWith("qwen-dashscope/") || model.startsWith("qwen-dashscope:");
+    route = isDeepSeek ? "deepseek" : (isOpencodeGo ? "opencode-go" : (isDashScope ? "dashscope" : "openai"));
     let body = incomingBody;
     let headers;
     let baseUrl;
@@ -423,6 +446,13 @@ async function proxy(req, res) {
       headers = opencodeGoHeaders(goKey, req.headers);
       baseUrl = config.opencodeGoBaseUrl || "https://opencode.ai/zen/go/v1";
       // opencode-go 端点只接受 chat/completions + 无前缀模型名
+      body = sanitizeOpencodeGoBody(incomingBody, incomingEncoding);
+      req.routerPathOverride = "chat/completions";
+    } else if (isDashScope) {
+      const dsKey = loadDashScopeKey();
+      if (!dsKey) throw new Error("DashScope API key is unavailable (check ~/.local/share/opencode/auth.json qwen)");
+      headers = opencodeGoHeaders(dsKey, req.headers);
+      baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1";
       body = sanitizeOpencodeGoBody(incomingBody, incomingEncoding);
       req.routerPathOverride = "chat/completions";
     } else {
@@ -492,7 +522,11 @@ async function handleListModels(req, res, url) {
       const unifiedPath = path.join(root, "..", "unified-models.json");
       const unified = JSON.parse(fs.readFileSync(unifiedPath, "utf8"));
       extraModels = (unified.models || []).filter(
-        (m) => m.slug && (m.slug.startsWith("deepseek-") || m.slug.startsWith("opencode-"))
+        (m) => m.slug && (
+          m.slug.startsWith("deepseek-")
+          || m.slug.startsWith("opencode-")
+          || m.slug.startsWith("qwen-dashscope")
+        )
       );
     } catch {}
     const seen = new Set(openaiModels.map((m) => m.slug));

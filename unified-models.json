@@ -1322,6 +1322,578 @@
       "output_modalities": [
         "text"
       ]
+    },
+    {
+      "slug": "qwen-dashscope/qwen3.8-max",
+      "display_name": "DashScope qwen3.8-max",
+      "description": "阿里云 DashScope: Qwen3.8 Max 旗舰",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper"
+        }
+      ],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "slug": "qwen-dashscope/qwen3.7-max",
+      "display_name": "DashScope qwen3.7-max",
+      "description": "阿里云 DashScope: Qwen3.7 Max",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper"
+        }
+      ],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "slug": "qwen-dashscope/qwen3.7-plus",
+      "display_name": "DashScope qwen3.7-plus",
+      "description": "阿里云 DashScope: Qwen3.7 Plus",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper"
+        }
+      ],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "slug": "qwen-dashscope/qwen3.7-flash",
+      "display_name": "DashScope qwen3.7-flash",
+      "description": "阿里云 DashScope: Qwen3.7 Flash 快速",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper"
+        }
+      ],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "slug": "qwen-dashscope/qwen3.6-max-preview",
+      "display_name": "DashScope qwen3.6-max-preview",
+      "description": "阿里云 DashScope: Qwen3.6 Max 预览",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper"
+        }
+      ],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "slug": "qwen-dashscope/qwen3.6-plus",
+      "display_name": "DashScope qwen3.6-plus",
+      "description": "阿里云 DashScope: Qwen3.6 Plus",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper"
+        }
+      ],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "slug": "qwen-dashscope/qwen3.6-flash",
+      "display_name": "DashScope qwen3.6-flash",
+      "description": "阿里云 DashScope: Qwen3.6 Flash",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper"
+        }
+      ],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "slug": "qwen-dashscope/qwen3.6-27b",
+      "display_name": "DashScope qwen3.6-27b",
+      "description": "阿里云 DashScope: Qwen3.6 27B",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper"
+        }
+      ],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "slug": "qwen-dashscope/qwen3.6-35b-a3b",
+      "display_name": "DashScope qwen3.6-35b-a3b",
+      "description": "阿里云 DashScope: Qwen3.6 35B MoE",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper"
+        }
+      ],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "slug": "qwen-dashscope/qwen3.5-flash",
+      "display_name": "DashScope qwen3.5-flash",
+      "description": "阿里云 DashScope: Qwen3.5 Flash",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper"
+        }
+      ],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "slug": "qwen-dashscope/qwen3.5-plus",
+      "display_name": "DashScope qwen3.5-plus",
+      "description": "阿里云 DashScope: Qwen3.5 Plus",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper"
+        }
+      ],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "slug": "qwen-dashscope/qwen3.5-122b-a10b",
+      "display_name": "DashScope qwen3.5-122b-a10b",
+      "description": "阿里云 DashScope: Qwen3.5 122B MoE",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper"
+        }
+      ],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "slug": "qwen-dashscope/qwen3.5-35b-a3b",
+      "display_name": "DashScope qwen3.5-35b-a3b",
+      "description": "阿里云 DashScope: Qwen3.5 35B MoE",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper"
+        }
+      ],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "slug": "qwen-dashscope/qwen3.5-27b",
+      "display_name": "DashScope qwen3.5-27b",
+      "description": "阿里云 DashScope: Qwen3.5 27B",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper"
+        }
+      ],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "slug": "qwen-dashscope/deepseek-v4-flash",
+      "display_name": "DashScope deepseek-v4-flash",
+      "description": "阿里云 DashScope: DeepSeek V4 Flash (DashScope)",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper"
+        }
+      ],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "slug": "qwen-dashscope/deepseek-v4-pro",
+      "display_name": "DashScope deepseek-v4-pro",
+      "description": "阿里云 DashScope: DeepSeek V4 Pro (DashScope)",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper"
+        }
+      ],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "slug": "qwen-dashscope/kimi/kimi-k3",
+      "display_name": "DashScope kimi/kimi-k3",
+      "description": "阿里云 DashScope: Kimi K3 (DashScope)",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper"
+        }
+      ],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "slug": "qwen-dashscope/kimi/kimi-k2.7-code",
+      "display_name": "DashScope kimi/kimi-k2.7-code",
+      "description": "阿里云 DashScope: Kimi K2.7 Code (DashScope)",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper"
+        }
+      ],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "slug": "qwen-dashscope/glm-5.2",
+      "display_name": "DashScope glm-5.2",
+      "description": "阿里云 DashScope: GLM-5.2 (DashScope)",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper"
+        }
+      ],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "slug": "qwen-dashscope/glm-5.1",
+      "display_name": "DashScope glm-5.1",
+      "description": "阿里云 DashScope: GLM-5.1 (DashScope)",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper"
+        }
+      ],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "slug": "qwen-dashscope/MiniMax/MiniMax-M3",
+      "display_name": "DashScope MiniMax/MiniMax-M3",
+      "description": "阿里云 DashScope: MiniMax M3 (DashScope)",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper"
+        }
+      ],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "slug": "qwen-dashscope/MiniMax/MiniMax-M2.7",
+      "display_name": "DashScope MiniMax/MiniMax-M2.7",
+      "description": "阿里云 DashScope: MiniMax M2.7 (DashScope)",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper"
+        }
+      ],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
     }
   ]
 }
