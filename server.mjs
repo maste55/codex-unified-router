@@ -887,6 +887,45 @@ async function handleSystemStatus(req, res) {
   } catch (e) { return json(res, 500, { error: e?.message || "failed" }); }
 }
 
+// 修复 Codex 对话框丢失：确保 CODEX_HOME 指向真实 ~/.codex + 报告会话健康
+async function handleFixSessions(req, res) {
+  try {
+    const realHome = path.join(os.homedir(), ".codex");
+    const results = {};
+    // 1. 设置用户级 CODEX_HOME（持久化）
+    try {
+      const ps = `[System.Environment]::SetEnvironmentVariable('CODEX_HOME', '${realHome.replace(/\\/g, "\\\\")}', 'User')`;
+      execFileSync("powershell.exe", ["-NoProfile", "-Command", ps], { windowsHide: true });
+      results.codex_home_set = true;
+      results.codex_home = realHome;
+    } catch (e) {
+      results.codex_home_set = false;
+      results.codex_home_error = e?.message || String(e);
+    }
+    // 2. 检查会话文件与索引健康
+    const sessionsDir = path.join(realHome, "sessions");
+    let sessionFiles = 0;
+    try {
+      const walk = (d) => {
+        for (const f of fs.readdirSync(d, { withFileTypes: true })) {
+          const fp = path.join(d, f.name);
+          if (f.isDirectory()) walk(fp);
+          else if (f.name.endsWith(".jsonl")) sessionFiles++;
+        }
+      };
+      walk(sessionsDir);
+      results.session_files = sessionFiles;
+    } catch (e) { results.session_files = -1; results.session_error = e?.message; }
+    // 3. 索引行数
+    try {
+      const idx = path.join(realHome, "session_index.jsonl");
+      results.session_index = fs.existsSync(idx) ? fs.readFileSync(idx, "utf8").split("\n").filter(Boolean).length : 0;
+    } catch { results.session_index = 0; }
+    results.healthy = results.session_files > 0 && results.codex_home_set;
+    return json(res, 200, results);
+  } catch (e) { return json(res, 500, { error: e?.message || "failed" }); }
+}
+
 async function handleSystemRestart(req, res) {
   try {
     json(res, 200, { ok: true, message: "restarting router..." });
@@ -967,7 +1006,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && (url.pathname === "/panel/api/models" || url.pathname === "/panel/api/keys" || url.pathname === "/panel/api/system")) {
     if (!panelAuthOk(req)) return json(res, 401, { error: "Unauthorized" });
   }
-  if (req.method === "POST" && (url.pathname === "/panel/api/toggle" || url.pathname === "/panel/api/keys" || url.pathname === "/panel/api/keys/test" || url.pathname === "/panel/api/system/restart")) {
+  if (req.method === "POST" && (url.pathname === "/panel/api/toggle" || url.pathname === "/panel/api/keys" || url.pathname === "/panel/api/keys/test" || url.pathname === "/panel/api/system/restart" || url.pathname === "/panel/api/fix-sessions")) {
     if (!panelAuthOk(req)) return json(res, 401, { error: "Unauthorized" });
   }
   if (req.method === "DELETE" && url.pathname === "/panel/api/keys") {
@@ -999,6 +1038,9 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "POST" && url.pathname === "/panel/api/system/restart") {
     return handleSystemRestart(req, res);
+  }
+  if (req.method === "POST" && url.pathname === "/panel/api/fix-sessions") {
+    return handleFixSessions(req, res);
   }
   if (req.method === "GET" && url.pathname === "/panel" || req.method === "GET" && url.pathname === "/panel/") {
     return servePanel(res);

@@ -107,6 +107,7 @@ input:checked + .slider:before { transform:translateX(20px); }
   <div class="actions" style="margin-top:20px">
     <button class="btn btn-primary" onclick="restartRouter()">🔄 重启 router</button>
     <button class="btn" style="background:#ff9800" onclick="loadSystem()">📡 刷新状态</button>
+    <button class="btn" style="background:#9c27b0" onclick="fixSessions()">💬 修复对话框丢失</button>
   </div>
 </div>
 
@@ -389,6 +390,22 @@ async function loadSystem() {
     '<div class="stat-row"><span class="label">模型总数</span><span class="value">' + d.models.total + ' 个</span></div>' +
     '<div class="stat-row"><span class="label">可见模型</span><span class="value">' + d.models.visible + ' 个</span></div>' +
     '<div class="stat-row"><span class="label">Codex 目录</span><span class="value">' + d.models.catalog + ' 个</span></div>';
+}
+async function fixSessions() {
+  const btn = event.target;
+  btn.textContent = "修复中..."; btn.disabled = true;
+  try {
+    const r = await apiFetch("/panel/api/fix-sessions", { method: "POST" });
+    const d = await r.json();
+    if (d.healthy) {
+      toast("✅ 已修复：CODEX_HOME 已指向 " + d.codex_home + "，检测到 " + d.session_files + " 个会话文件、" + d.session_index + " 条索引。请完全退出并重启 Codex！");
+    } else {
+      toast("⚠️ 未完全修复：" + JSON.stringify(d).slice(0, 120));
+    }
+  } catch (e) {
+    toast("修复失败: " + e.message);
+  }
+  btn.textContent = "💬 修复对话框丢失"; btn.disabled = false;
 }
 async function restartRouter() {
   if (!confirm("重启 unified-router？看门狗会自动拉起。")) return;
