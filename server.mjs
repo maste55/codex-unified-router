@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Readable } from "node:stream";
 import { spawn, execFileSync } from "node:child_process";
+import net from "node:net";
 import { zstdDecompressSync } from "node:zlib";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -645,6 +646,121 @@ async function handlePanelToggle(req, res) {
   }
 }
 
+// ===== Key 管理 API（复用 keyman vault，DPAPI 加密）=====
+const KEYMAN_VAULT_FILE = path.join(os.homedir(), ".codex", "keyman", "vault.json");
+
+function loadKeyVault() {
+  try { return JSON.parse(fs.readFileSync(KEYMAN_VAULT_FILE, "utf8")); }
+  catch { return { version: 1, keys: {} }; }
+}
+function saveKeyVault(v) {
+  fs.mkdirSync(path.dirname(KEYMAN_VAULT_FILE), { recursive: true });
+  fs.writeFileSync(KEYMAN_VAULT_FILE, JSON.stringify(v, null, 2), { mode: 0o600 });
+}
+function dpapiProtectForPanel(plain) {
+  try {
+    const ps = `
+Add-Type -AssemblyName System.Security;
+$bytes = [System.Text.Encoding]::UTF8.GetBytes($env:KM_PLAIN);
+$enc = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser);
+[Convert]::ToBase64String($enc)`;
+    const out = execFileSync("powershell.exe", ["-NoProfile", "-Command", ps], {
+      env: { ...process.env, KM_PLAIN: plain }, encoding: "utf8", windowsHide: true,
+    });
+    return out.trim();
+  } catch { return ""; }
+}
+function maskKeyForPanel(k) {
+  if (!k || k.length < 8) return "***";
+  return k.slice(0, 6) + "..." + k.slice(-4);
+}
+
+async function handleKeysList(req, res) {
+  try {
+    const vault = loadKeyVault();
+    const keys = Object.keys(vault.keys || {}).sort().map((name) => {
+      const e = vault.keys[name];
+      let masked = "***";
+      try { masked = maskKeyForPanel(keymanDecrypt(e.enc)); } catch {}
+      return { name, desc: e.desc || "", masked, updated: e.updated || e.created || "" };
+    });
+    return json(res, 200, { keys });
+  } catch (e) { return json(res, 500, { error: e?.message || "failed" }); }
+}
+
+async function handleKeysAdd(req, res) {
+  try {
+    const body = JSON.parse((await readBody(req)).toString("utf8"));
+    const { name, key, desc } = body;
+    if (!name || !key) return json(res, 400, { error: "name and key required" });
+    const vault = loadKeyVault();
+    vault.keys[name] = {
+      enc: dpapiProtectForPanel(key),
+      desc: desc || "",
+      created: vault.keys[name]?.created || new Date().toISOString(),
+      updated: new Date().toISOString(),
+    };
+    saveKeyVault(vault);
+    console.log(JSON.stringify({ event: "key_added", name }));
+    return json(res, 200, { ok: true, name, masked: maskKeyForPanel(key) });
+  } catch (e) { return json(res, 500, { error: e?.message || "failed" }); }
+}
+
+async function handleKeysRemove(req, res) {
+  try {
+    const url = new URL(req.url, "http://127.0.0.1");
+    const name = url.searchParams.get("name");
+    if (!name) return json(res, 400, { error: "name required" });
+    const vault = loadKeyVault();
+    if (vault.keys?.[name]) {
+      delete vault.keys[name];
+      saveKeyVault(vault);
+      console.log(JSON.stringify({ event: "key_removed", name }));
+      return json(res, 200, { ok: true, name });
+    }
+    return json(res, 404, { error: "key not found: " + name });
+  } catch (e) { return json(res, 500, { error: e?.message || "failed" }); }
+}
+
+// ===== 程序状态 API =====
+function portListening(port) {
+  return new Promise((resolve) => {
+    const s = net.connect({ host: "127.0.0.1", port, timeout: 1000 });
+    s.on("connect", () => { s.destroy(); resolve(true); });
+    s.on("error", () => resolve(false));
+    s.on("timeout", () => { s.destroy(); resolve(false); });
+  });
+}
+
+async function handleSystemStatus(req, res) {
+  try {
+    const [bridge, ollama] = await Promise.all([portListening(17841), portListening(11434)]);
+    const vault = loadKeyVault();
+    const vis = loadVisibility();
+    const unified = JSON.parse(fs.readFileSync(path.join(root, "..", "unified-models.json"), "utf8"));
+    const catalog = JSON.parse(fs.readFileSync(CATALOG_FILE, "utf8")).models || [];
+    return json(res, 200, {
+      router: { port: config.listenPort, pid: process.pid, up: true },
+      bridge: { port: 17841, up: bridge },
+      ollama: { port: 11434, up: ollama },
+      keys: Object.keys(vault.keys || {}).length,
+      models: { total: (unified.models || []).length, visible: Object.keys(vis).filter((k) => vis[k] !== false).length + (unified.models || []).filter((m) => !(m.slug in vis)).length, catalog: catalog.length },
+      pid_file: pidFile,
+    });
+  } catch (e) { return json(res, 500, { error: e?.message || "failed" }); }
+}
+
+async function handleSystemRestart(req, res) {
+  try {
+    json(res, 200, { ok: true, message: "restarting router..." });
+    setTimeout(() => {
+      try { fs.unlinkSync(pidFile); } catch {}
+      process.exit(0);
+    }, 300);
+    // watchdog 会在 2 秒内自动拉起新进程
+  } catch (e) { return json(res, 500, { error: e?.message || "failed" }); }
+}
+
 // 面板 HTML：读取独立文件 panel.html（与 server.mjs 同目录）
 const PANEL_FILE = path.join(root, "panel.html");
 function servePanel(res) {
@@ -715,6 +831,23 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "POST" && url.pathname === "/panel/api/toggle") {
     return handlePanelToggle(req, res);
+  }
+  // Key 管理端点
+  if (req.method === "GET" && url.pathname === "/panel/api/keys") {
+    return handleKeysList(req, res);
+  }
+  if (req.method === "POST" && url.pathname === "/panel/api/keys") {
+    return handleKeysAdd(req, res);
+  }
+  if (req.method === "DELETE" && url.pathname === "/panel/api/keys") {
+    return handleKeysRemove(req, res);
+  }
+  // 程序状态端点
+  if (req.method === "GET" && url.pathname === "/panel/api/system") {
+    return handleSystemStatus(req, res);
+  }
+  if (req.method === "POST" && url.pathname === "/panel/api/system/restart") {
+    return handleSystemRestart(req, res);
   }
   if (req.method === "GET" && url.pathname === "/panel" || req.method === "GET" && url.pathname === "/panel/") {
     return servePanel(res);
