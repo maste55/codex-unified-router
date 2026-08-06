@@ -1,217 +1,247 @@
-# Codex 模型路由体系 · 运维手册（2026-08-06 最终版）
+# Codex 模型路由体系 · 运维手册（2026-08-07 最终版）
 
-> 本文档记录 Codex 本地模型路由的最终架构、配置要点、故障排查与运维规范。
+> 本文档记录 Codex 本地模型路由的**最终正确架构**、配置要点、故障排查与运维规范。
 > 权威仓库：`https://github.com/maste55/codex-unified-router`（公开）
+> **2026-08-07 定稿**：回到最初版软路由（commit `d0e6d77`，server.mjs 381 行），杜绝过度设计。
 
 ---
 
-## 一、最终架构（一句话）
+## 〇、最终架构（一句话，2026-08-07 定稿）
 
-**Codex 直连 `codex-bridge`（127.0.0.1:17841）全能网关**，bridge 按模型名前缀分流到 4 类上游。
+**Codex 直连 unified-router（127.0.0.1:4791）软路由**，router 按模型名前缀双路分流：
 
 ```
 Codex 桌面版
-  │  openai_base_url = http://127.0.0.1:17841/v1
+  │  openai_base_url = http://127.0.0.1:4791/v1
   ▼
-codex-bridge (17841)  ← 全能网关（唯一入口）
-  ├─ opencode-go/*   → opencode.ai/zen/go/v1        （opencode 订阅）
-  ├─ qwen-dashscope/* → dashscope.aliyuncs.com/compatible-mode/v1 （阿里云）
-  ├─ deepseek-*      → api.deepseek.com             （DeepSeek 官方）
-  └─ gpt-5.6-* 等    → chatgpt.com/backend-api      （ChatGPT 官方）
+unified-router (4791)  ← 381 行最初版软路由（唯一入口）
+  ├─ deepseek-*   → https://api.deepseek.com        （DeepSeek 官方，AI_API_KEY）
+  └─ 其他模型     → openaiBaseUrl（默认官方 / 或 17841 codex-chatgpt-web 桥）
 ```
 
-**模型总数：56 个**（opencode-go 25 + dashscope 22 + deepseek 2 + 官方 7）
+**模型总数：9 个**（官方 8 + deepseek-v4-flash/pro；用户明确不要 opencode-go / qwen-dashscope）
+
+**核心原则："
+回到最初版软路由，杜绝过度设计"** —— 每个"优化"都可能引入新故障（见 §七 弯路教训）。
 
 ---
 
-## 二、关键文件清单
+## 一、关键文件清单
 
 | 文件 | 作用 |
 |---|---|
-| `~/.codex/config.toml` | Codex 配置（base_url、model） |
-| `~/.codex/unified-models.json` | 模型目录（56 个，router/bridge 读） |
-| `~/.codex/unified-models-catalog.json` | Codex 兼容格式目录（含 shell_type） |
-| `~/.codex/keyman/vault.json` | API Key 保险库（DPAPI 加密） |
-| `~/.codex/unified-router/model-visibility.json` | 面板模型开关状态 |
-| `~/.codex/sessions/` | 会话记录（JSONL，210+ 个） |
-| `~/.codex/state_5.sqlite` | 会话索引（SQLite，568 线程） |
-| `global-workspace/.codex-bridge/codex-bridge.mjs` | **全能网关本体** |
-| `global-workspace/.codex-bridge/keyman/keyman.mjs` | Key 管理器 CLI |
+| `~/.codex/config.toml` | Codex 配置（`openai_base_url=4791`、model、features） |
+| `~/.codex/unified-models.json` | 模型目录（9 个，router /v1/models 合并用） |
+| `~/.codex/unified-router/server.mjs` | **unified-router 本体（381 行最初版 + exec 过滤补丁）** |
+| `~/.codex/unified-router/router.config.json` | 路由配置（listenPort/openaiBaseUrl/deepseekBaseUrl/envFile/authFile） |
+| `~/.codex/auth.json` | ChatGPT access_token（非 deepseek 路由认证用） |
+| `E:/codex-work/cangku/inventory-reconciliation/.env` | DeepSeek `AI_API_KEY` 来源 |
+| `~/.codex/codex-chatgpt-web/` | codex-chatgpt-web v2.0.0（可选 GPT 桥，端口 17841） |
+
+> ⚠️ **已废弃组件（勿重新启用）**：`codex-bridge.mjs`（全能网关）、`keyman/`（Key 保险库）、面板/配置器、全部守护进程（UnifiedRouter-Watchdog / CodexUnifiedRouterGuard / CodexUnifiedModelRouter / CodexMemoryVectorIndex）。
 
 ---
 
-## 三、配置要点（⚠️ 最重要的坑）
+## 二、配置要点（⚠️ 最重要的坑）
 
-### 3.1 绝对不要设置 `model_provider`
+### 2.1 绝对不要设置 `model_provider`
 
 ```toml
 # ❌ 错误（会导致会话列表"没有聊天"）
 model_provider = "unified-router"
 
-# ✅ 正确（默认 openai provider + base_url 指 bridge）
-openai_base_url = "http://127.0.0.1:17841/v1"
+# ✅ 正确（默认 provider + base_url 指 unified-router）
+openai_base_url = "http://127.0.0.1:4791/v1"
 ```
 
 **原因**：Codex 会话列表按 `model_provider` 过滤（Issue #24648 类 bug）。
 设置自定义 provider 后，`thread/list` 只返回该 provider 的线程，历史会话全部"消失"（数据其实完好）。
-**症状**：左侧所有项目显示"没有聊天"，但 `~/.codex/sessions` 和 `state_5.sqlite` 数据都在。
 
-### 3.2 config.toml 推荐配置
+### 2.2 绝对不要设置 `model_catalog_json`
+
+```toml
+# ❌ 错误（会导致 Codex 界面打不开）
+model_catalog_json = "..."
+```
+
+**原因**：模型目录缺字段会让 Codex 前端崩溃（2026-08-06 实测）。
+
+### 2.3 config.toml 最终推荐配置（2026-08-07 实测可用）
 
 ```toml
 disable_response_storage = true
-model = "gpt-5.6-sol"              # 默认模型（官方）
+model = "deepseek-v4-flash"          # 默认模型（主模型）
 model_reasoning_effort = "high"
-openai_base_url = "http://127.0.0.1:17841/v1"   # ← 指向 bridge
+openai_base_url = "http://127.0.0.1:4791/v1"   # ← 指向 unified-router
 
-[model_providers.ollama-local]     # 本地模型（可选）
+[features]
+memories = true
+remote_compaction_v2 = false         # 关闭远程压缩 v2（避免触发不兼容路径）
+
+[model_providers.ollama-local]       # 本地模型（可选）
 base_url = "http://127.0.0.1:11434/v1"
 wire_api = "responses"
 ```
 
----
+### 2.4 unified-router 路由配置 `router.config.json`
 
-## 四、codex-bridge 全能网关（17841）
-
-### 4.1 能力
-
-| 能力 | 说明 |
-|---|---|
-| 模型列表 | `GET /v1/models` 返回可见模型（按面板开关过滤，含 shell_type） |
-| 对话 | `POST /v1/responses` 按 model 前缀分流到 4 类上游 |
-| zstd 压缩 | 自动解压 `content-encoding: zstd` 请求体（Codex 标准） |
-| 工具过滤 | 只保留 `apply_patch`，过滤 exec 等；转 deepseek 兼容格式 |
-| 认证 | 校验 `~/.codex/auth.json` 的 access_token |
-| 健康检查 | `GET /healthz` |
-
-### 4.2 关键实现细节
-
-- **zstd 解压**：Codex 用 zstd 压缩请求体，bridge 必须 `zstdDecompressSync` 后再 JSON.parse，否则报 `"Request body must be JSON"`
-- **工具过滤**：deepseek/dashscope 只支持 `apply_patch`，Codex 的 `exec` 等工具要过滤；apply_patch 需补 `parameters: {type:"object",properties:{}}`
-- **模型可见性**：读 `model-visibility.json`，面板关掉的模型 Codex 不显示
-
----
-
-## 五、配置面板（http://localhost:4791/panel）
-
-> 注意：面板挂在 **router (4791)** 上，不是 bridge。router 仅作面板/备用，不再是 Codex 的 provider。
-
-### 功能
-
-| Tab | 功能 |
-|---|---|
-| 📦 模型开关 | 56 个模型显示/隐藏（写 model-visibility.json，bridge 读取生效） |
-| 🔑 API Key | 四家 provider 的 key 添加/修改/测试/删除（DPAPI 加密） |
-| ⚙️ 程序管理 | router/bridge/ollama 状态、重启 router、**修复对话框丢失** |
-
-### 访问
-
-- 地址：`http://localhost:4791/panel`
-- 面板 API 需 token（`panel-token.txt`），防 CSRF
-- 面板修改模型开关后，**重启 Codex** 生效（bridge 实时读 visibility，但 Codex 缓存模型列表）
-
----
-
-## 六、Key 管理（keyman）
-
-### 6.1 已存 Key（10 个）
-
-| 名称 | 用途 |
-|---|---|
-| `opencode:opencode-go` | opencode 订阅 |
-| `opencode:qwen` | 阿里云 DashScope |
-| `opencode:deepseek` / `opencode:deepseek1` | DeepSeek |
-| `codex:chatgpt-access-token` | ChatGPT 官方 |
-| `env:DASHSCOPE_API_KEY` / `env:GLM_API_KEY` / 等 | 环境变量导入 |
-
-### 6.2 命令
-
-```bash
-keyman list                 # 列出（掩码）
-keyman get <name>           # 取明文（脚本用）
-keyman add <name> <key>     # 添加/更新
-keyman remove <name>        # 删除
-keyman import               # 批量导入已知来源
+```json
+{
+  "listenHost": "127.0.0.1",
+  "listenPort": 4791,
+  "maxBodyBytes": 134217728,
+  "openaiBaseUrl": "http://127.0.0.1:17841/v1",
+  "deepseekBaseUrl": "https://api.deepseek.com",
+  "deepseekEnvFile": "E:/codex-work/cangku/inventory-reconciliation/.env",
+  "codexAuthFile": "C:/Users/linjin/.codex/auth.json"
+}
 ```
 
-- Skill：说"存个 key / 查 key / 删 key"自动触发 `keyman`
-- 存储：`~/.codex/keyman/vault.json`（Windows DPAPI CurrentUser 加密，仅本用户可解）
+- `openaiBaseUrl`：非 deepseek 模型的转发目标（默认官方，或 codex-chatgpt-web 桥 17841）
+- `deepseekEnvFile`：DeepSeek key 文件（读 `AI_API_KEY`，注意不是 `DEEPSEEK_API_KEY`）
 
 ---
 
-## 七、故障排查手册
+## 三、为什么现在不再出现上下文压缩（compaction）问题
 
-### 7.1 左侧"没有聊天"（会话列表空）
+> 2026-08-07 用户实测确认：现在**不再出现上下文压缩**。本文档固化根因。
+
+### 3.1 直接原因：上下文窗口变大 + 压缩功能关闭
+
+| 因素 | 之前（出问题时代） | 现在 |
+|---|---|---|
+| 模型 | gpt-5.6-sol（272K 窗口） | deepseek-v4-flash（**1048K 窗口**） |
+| 路由 | 直连官方 / bridge 网关 | unified-router(4791) 原样透传 |
+| 压缩开关 | 官方默认 compact | `remote_compaction_v2 = false` |
+| 网关干预 | bridge 曾做 compact 本地模拟 | **router 零 compact 处理** |
+
+- `deepseek-v4-flash` context = **1,048,576 tokens**（100 万），是 GPT-5.6（272K）的 3.86 倍
+- 普通对话**物理上很难达到压缩阈值** → 压缩流程不再触发
+- `remote_compaction_v2 = false` 显式关闭远程压缩 v2 → 避免 Codex 侧不兼容路径
+
+### 3.2 根本原因：不再有"网关模拟压缩"这个故障源
+
+unified-router（381 行最初版）对 compact 请求**零处理、原样透传**，不存在"模拟压缩格式不认"的问题。
+
+### 3.3 关键保护（三重保险）
+
+1. `remote_compaction_v2 = false` —— 关闭远程压缩 v2
+2. 100 万 context window —— 物理上难触发压缩
+3. unified-router 无 compact 逻辑 —— 无故障源
+
+> **一句话：不是"压缩被修好了"，而是"压缩被绕开了"。**
+
+---
+
+## 四、codex-chatgpt-web（可选 GPT 桥，17841）
+
+### 4.1 定位
+
+codex-chatgpt-web v2.0.0（`miuuyy/codex-chatgpt-web`）是 **ChatGPT Web 官方模型桥**（browser-only 模式），提供 `ChatGPT Web — Instant/High/Pro` 模型。
+
+### 4.2 与 unified-router 的关系（⚠️ 互斥）
+
+- `config.toml` 的 `openai_base_url` **只能有一个**
+- **4791（unified-router/deepseek）与 17841（GPT 桥）是互斥入口**，不能串联转发 GPT 模型
+- codex-chatgpt-web 的 `/responses` 需要 Codex 原生 `turn_id` 元数据（浏览器会话回放），unified-router 转发时不带 → **GPT 桥模型必须 Codex 直连 17841**
+- **默认路由 = 4791**（deepseek 主模型）；要用 GPT 官方模型时把 `openai_base_url` 切到 `http://127.0.0.1:17841/v1` 并重启 Codex
+
+### 4.3 安装要点（排障记录）
+
+- GUI 的 setup-core **不支持** `--replace-codex-route` → 必须用 CLI：
+  ```
+  bun cli.js setup --browser-only --browser-host-descriptor <launcher-browser.json> --replace-codex-route --acknowledge-unofficial --auto-approve-tool-calls
+  ```
+- 报 `ChatGPT effort menu did not expose item index 0 (open=false; itemCount=0)` = ChatGPT 页面模型菜单未渲染。解法：先手动点击模型按钮（`button[aria-haspopup="menu"][data-tone="neutral"]`）弹出菜单，再立即跑 setup
+- 安装后 `openai_base_url` 会被改成 17841 → 手动改回 4791 即恢复 deepseek（launcher 报 "changed after setup" 警告，无害）
+- 17841 服务无 Windows daemon（service status: supported=false），靠 launcher GUI 常驻或手动 `bun cli.js serve` 后台启动
+
+---
+
+## 五、故障排查手册
+
+### 5.1 左侧"没有聊天"（会话列表空）
 
 | 排查 | 处理 |
 |---|---|
 | config.toml 是否设了 `model_provider` | **删除它**，恢复默认 provider |
-| `openai_base_url` 是否 17841 | 改回 `http://127.0.0.1:17841/v1` |
+| `openai_base_url` 是否 4791 | 改回 `http://127.0.0.1:4791/v1` |
 | 数据是否还在 | `~/.codex/sessions` 文件数 + `state_5.sqlite` threads 数 |
-| 面板"修复对话框丢失"按钮 | 一键设 CODEX_HOME + 检查会话健康 |
 
-### 7.2 `Request body must be JSON`
+### 5.2 `Unsupported custom tool: 'exec'`
 
-**原因**：Codex 用 zstd 压缩请求体，bridge 没解压。
-**修复**：bridge 加 zstd 解压（已实现）。
+**原因**：Codex 带 exec 工具，deepseek 只支持 apply_patch/web_search/function。
+**修复**：router `sanitizeDeepSeekBody` 过滤工具（已实现，唯一补丁）。
 
-### 7.3 `Unsupported custom tool: 'exec'`
+### 5.3 `The 'deepseek-v4-flash' model is not supported when using Codex with a ChatGPT account`
 
-**原因**：Codex 带 exec 工具，deepseek 只支持 apply_patch。
-**修复**：bridge 过滤工具（已实现）。
+**正确判断**：这是 **unified-router 接入失效**，不是 deepseek 不合法。
+**修复方向**：恢复/修正 unified-router 接入（4791），**绝不能移除 deepseek 配置**。
 
-### 7.4 模型下拉少/缺模型
+### 5.4 `deepseek-v4-pro` 返回 400
 
-| 排查 | 处理 |
-|---|---|
-| bridge 是否返回完整 catalog | `curl localhost:17841/v1/models` 看模型数 |
-| 面板是否关了模型 | `model-visibility.json` 检查 false 项 |
-| catalog 是否含 shell_type | `unified-models-catalog.json` 检查 |
+**原因**：DeepSeek 官方限制（"available starting early August 2026"）。
+**处理**：等官方放开，无需操作；用 `deepseek-v4-flash`。
 
-### 7.5 官方模型 429
+### 5.5 官方模型 429 / GPT 桥模型不可用
 
-**原因**：ChatGPT 账号额度用完（8月8日 12:55 重置）。
-**处理**：用 deepseek/opencode/dashscope 通道（不受官方额度限制）。
-
-### 7.6 remote compact 报错（deepseek 对话过长时）
-
-**报错**：`remote compaction v2 expected exactly one compaction output item, got 0 from 2 output items`
-**原因**：deepseek 响应带 `<think>` 推理，Codex 的 remote_compaction_v2 解析器拆成 2 个 output，找不到 compact 项（官方已知 bug Issue #179/#28592）。
-**最终结论（2026-08-06 实测）**：compact 报错根因是 **config.toml 的 `service_tier = "default"`**（社区 Issue #24648 验证），移除后 compact 恢复正常！`Unsupported custom tool: exec` 是 deepseek 官方限制（只支持 apply_patch）。会话列表丢失是 model_provider 设置导致（Issue #24648），移除 model_provider 恢复。（返回含 message + compaction 项的合法 `response.compaction`），不再依赖上游 compact 端点（deepseek 无此端点、官方受额度限制）。已验证 compact 请求与后续对话均 200。
-
-### 7.7 opencode-go 503
-
-**原因**：opencode.ai 上游临时故障（直接调官方也 503，非本地问题）。
-**处理**：等待恢复，或切换 deepseek/dashscope 通道。
+**原因**：ChatGPT 账号额度限制，或 17841 桥未运行（launcher GUI 关闭）。
+**处理**：用 deepseek 通道；或重开 launcher / 手动 `bun cli.js serve`。
 
 ---
 
-## 八、同步规范
+## 六、启动/验证命令
 
-1. **改 bridge**：编辑 `global-workspace/.codex-bridge/codex-bridge.mjs` → 重启 bridge → 验证
-2. **同步分享包**：复制到 `share/codex-bridge.mjs` → 重新打包 zip
-3. **推送 GitHub**：`cd /tmp/codex-unified-router && git pull && cp ... && git commit/push`
-4. **脱敏**：分享包里的 `linjin` 路径、真实 key 打包前必须清除（server.mjs 的 vlm-vision 路径泛化为 `<你的技能目录>`）
+```bash
+# 启动 unified-router
+node ~/.codex/unified-router/server.mjs        # 或 start-router.ps1
+
+# 健康检查
+curl http://127.0.0.1:4791/health              # {"status":"ok","routes":["openai","deepseek"]}
+
+# 冒烟测试（deepseek）
+cd ~/.codex/unified-router && node smoke-test.mjs deepseek-v4-flash
+
+# 启动 GPT 桥（可选，codex-chatgpt-web）
+cd ~/.codex-chatgpt-web/versions/2.0.0-win32-x64 && \
+  runtime/bun.exe app/cli.js serve
+```
 
 ---
 
-## 九、已解决问题记录（2026-08-06）
+## 七、弯路教训（2026-08-06 一整天故障复盘）
 
-| 问题 | 根因 | 修复 |
-|---|---|---|
-| 对话框全丢 | model_provider=unified-router 过滤会话 | 删除 model_provider，走 bridge |
-| 模型只剩官方 | bridge /v1/models 返回简化格式 | 改用 catalog 完整格式 |
-| 面板开关无效 | bridge 不读 visibility | bridge 读 model-visibility.json |
-| Request body must be JSON | zstd 压缩未解压 | bridge 加 zstd 解压 |
-| Unsupported tool exec | 工具未过滤 | bridge 过滤只留 apply_patch |
+| # | 弯路 | 为什么错 | 正确做法 |
+|---|---|---|---|
+| 1 | 加 codex-bridge 全能网关（17841） | 过度设计，引入多重故障源 | 回到 381 行最初版软路由 |
+| 2 | WS 转发（deepseek 官方不支持 WS） | router 崩溃 → 无限重连 | router 拒绝 WS 升级（426） |
+| 3 | compact 本地模拟 | Codex 解析器不认格式 → compact 报错 | router 对 compact 零处理、原样透传 |
+| 4 | 设 `model_provider` | 会话列表全丢（Issue #24648） | 不设，默认 provider |
+| 5 | 设 `model_catalog_json` | 界面打不开 | 不设 |
+| 6 | 模型目录塞 opencode-go/qwen-dashscope | 用户明确不要，徒增复杂度 | 只要官方 8 + deepseek 2 |
+| 7 | keyman/面板/配置器 | 过度设计 | 全部回撤，不重新加 |
+| 8 | 守护进程全家桶 | 与路由冲突/噪音 | 全部 Disabled，勿重启 |
+
+**核心教训**：用户说"能用"的状态**不要再动**——每个"优化"都可能引入新故障。涉及 router 修改：以本仓库（`maste55/codex-unified-router`）为权威，先验证再改。
+
+---
+
+## 八、网络要求
+
+**Clash Verge 服务 + 系统代理 7897 必须保持启用**（Codex 访问官方拉头像/用户名必需）；不要禁用（之前误禁导致头像/名字空白）。
+
+---
+
+## 九、同步规范
+
+1. **改 router**：编辑 `~/.codex/unified-router/server.mjs` → 重启 router → 验证（smoke-test）
+2. **推送 GitHub**：`cd /tmp/codex-unified-router && git pull && cp ... && git commit/push`
+3. **脱敏**：分享包里的 `linjin` 路径、真实 key 打包前必须清除
 
 ---
 
 ## 十、免责与提醒
 
 - **数据安全**：会话数据在 `~/.codex/sessions` + `state_5.sqlite`，备份在 `~/.codex/backup-*`
-- **key 安全**：vault DPAPI 加密，仅当前 Windows 用户可解；不要复制 vault 到其他机器
-- **官方额度**：ChatGPT 官方模型受账号额度限制（429），deepseek/opencode/dashscope 是用户自有 key/订阅不受影响
-
-### exec 工具报错修复（2026-08-06）
-router sanitizeDeepSeekBody 加 filterDeepSeekTools，过滤 exec 保留 apply_patch/web_search/function，已验证 200。
+- **key 安全**：DeepSeek key 在 `E:/codex-work/cangku/inventory-reconciliation/.env`，不要提交到仓库
+- **官方额度**：ChatGPT 官方模型受账号额度限制（429），deepseek 是用户自有 key 不受影响
