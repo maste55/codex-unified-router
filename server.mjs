@@ -576,6 +576,28 @@ function isVisible(slug) {
   return true; // 默认可见
 }
 
+// 判断模型是否支持图片输入（视觉能力）
+function modelSupportsImage(slug) {
+  // 官方 ChatGPT 模型：sol/terra/luna/5.5/5.4 全系支持图片（models_cache 确认）
+  if (/^gpt-5\./.test(slug)) return true;
+  // DashScope 多模态：qwen3.x 全系（官方文档：文本+图像+视频）
+  if (slug.startsWith("qwen-dashscope/") && /qwen3[.\d-]/.test(slug)) return true;
+  // DashScope 聚合的多模态模型
+  if (slug.startsWith("qwen-dashscope/kimi/kimi-k3")) return true;
+  if (slug.startsWith("qwen-dashscope/glm-5")) return true;
+  if (slug.startsWith("qwen-dashscope/MiniMax/MiniMax-M3")) return true;
+  // opencode-go 明确 multimodal 的模型
+  if (slug.startsWith("opencode-go/grok-4.5")) return true;
+  if (slug.startsWith("opencode-go/gpt-5.6-luna")) return true;
+  if (slug.startsWith("opencode-go/qwen3")) return true;
+  if (slug.startsWith("opencode-go/kimi-k3")) return true;
+  if (slug.startsWith("opencode-go/kimi-k2.7-code")) return true;
+  if (slug.startsWith("opencode-go/glm-5")) return true;
+  if (slug.startsWith("opencode-go/mimo-v2.5")) return true;
+  // 其他默认文本
+  return false;
+}
+
 // 生成 Codex 兼容格式 catalog（unified-models-catalog.json）
 function buildCatalogModel(slug, um, ctx) {
   return {
@@ -612,7 +634,7 @@ function buildCatalogModel(slug, um, ctx) {
     comp_hash: "3000",
     effective_context_window_percent: 95,
     experimental_supported_tools: [],
-    input_modalities: ["text"],
+    input_modalities: modelSupportsImage(slug) ? ["text", "image"] : ["text"],
     output_modalities: ["text"],
     supports_search_tool: false,
     use_responses_lite: false,
@@ -652,6 +674,7 @@ async function handlePanelModels(req, res) {
       display_name: m.display_name || m.slug,
       description: m.description || "",
       enabled: vis[m.slug] !== false,
+      vision: modelSupportsImage(m.slug),
     }));
     return json(res, 200, { models });
   } catch (e) {

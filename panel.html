@@ -59,7 +59,7 @@ input:checked + .slider:before { transform:translateX(20px); }
 </head>
 <body>
 <h1>🎛️ Codex 统一配置器</h1>
-<div class="sub">模型开关 · API Key 管理 · 程序状态 — 修改后重启 Codex 生效</div>
+<div class="sub">模型开关 · API Key 管理 · 程序状态 — 📷 = 支持图片输入，修改后重启 Codex 生效</div>
 
 <div class="tabs">
   <button class="tab active" data-tab="models" onclick="switchTab('models')">📦 模型开关</button>
@@ -166,7 +166,8 @@ function render() {
       const info = document.createElement("div");
       info.className = "info";
       const nm = document.createElement("div");
-      nm.className = "name"; nm.textContent = m.slug;
+      nm.className = "name";
+      nm.textContent = (m.vision ? "📷 " : "") + m.slug;
       const dc = document.createElement("div");
       dc.className = "desc"; dc.textContent = m.description || "";
       info.appendChild(nm); info.appendChild(dc);
