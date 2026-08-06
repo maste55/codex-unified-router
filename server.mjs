@@ -529,6 +529,135 @@ async function proxy(req, res) {
   }
 }
 
+// ===== 模型可见性面板 + Codex catalog 生成 =====
+const VISIBILITY_FILE = path.join(root, "model-visibility.json");
+const CATALOG_FILE = path.join(os.homedir(), ".codex", "unified-models-catalog.json");
+
+function loadVisibility() {
+  try { return JSON.parse(fs.readFileSync(VISIBILITY_FILE, "utf8")); }
+  catch { return {}; }
+}
+function saveVisibility(v) {
+  fs.mkdirSync(path.dirname(VISIBILITY_FILE), { recursive: true });
+  fs.writeFileSync(VISIBILITY_FILE, JSON.stringify(v, null, 2));
+}
+function isVisible(slug) {
+  const v = loadVisibility();
+  if (slug in v) return v[slug] !== false;
+  return true; // 默认可见
+}
+
+// 生成 Codex 兼容格式 catalog（unified-models-catalog.json）
+function buildCatalogModel(slug, um, ctx) {
+  return {
+    slug,
+    display_name: um.display_name || slug,
+    description: um.description || "",
+    default_reasoning_level: um.default_reasoning_level || "medium",
+    supported_reasoning_levels: um.supported_reasoning_levels || [
+      { effort: "low", description: "Fast responses with lighter reasoning" },
+      { effort: "medium", description: "Balances speed and reasoning depth for everyday tasks" },
+      { effort: "high", description: "Greater reasoning depth for complex problems" },
+    ],
+    shell_type: "shell_command",
+    visibility: "list",
+    supported_in_api: true,
+    priority: 10,
+    additional_speed_tiers: [],
+    service_tiers: [],
+    availability_nux: null,
+    upgrade: null,
+    base_instructions: "",
+    model_messages: {},
+    include_skills_usage_instructions: false,
+    default_reasoning_summary: "none",
+    support_verbosity: false,
+    default_verbosity: "low",
+    apply_patch_tool_type: "freeform",
+    web_search_tool_type: "text",
+    truncation_policy: { mode: "tokens", limit: 10000 },
+    supports_parallel_tool_calls: true,
+    supports_image_detail_original: false,
+    context_window: ctx,
+    max_context_window: ctx,
+    comp_hash: "3000",
+    effective_context_window_percent: 95,
+    experimental_supported_tools: [],
+    input_modalities: ["text"],
+    output_modalities: ["text"],
+    supports_search_tool: false,
+    use_responses_lite: false,
+    tool_mode: "code_mode_only",
+    multi_agent_version: "v2",
+  };
+}
+
+// 从 unified-models.json 生成 catalog（仅可见模型）
+function regenerateCatalog() {
+  try {
+    const unifiedPath = path.join(root, "..", "unified-models.json");
+    const unified = JSON.parse(fs.readFileSync(unifiedPath, "utf8"));
+    const models = (unified.models || []).filter((m) => m.slug && isVisible(m.slug));
+    const catalog = models.map((m) => {
+      const ctx = m.slug.startsWith("opencode-go") ? 128000 : 64000;
+      return buildCatalogModel(m.slug, m, ctx);
+    });
+    const out = { fetched_at: Date.now(), client_version: "0.146.0", models: catalog };
+    fs.writeFileSync(CATALOG_FILE, JSON.stringify(out, null, 2));
+    console.log(JSON.stringify({ event: "catalog_regenerated", models: catalog.length, file: CATALOG_FILE }));
+    return catalog.length;
+  } catch (e) {
+    console.error(JSON.stringify({ event: "catalog_generate_error", error: e?.message || String(e) }));
+    return 0;
+  }
+}
+
+// 面板 API：模型列表 + 开关状态
+async function handlePanelModels(req, res) {
+  try {
+    const unifiedPath = path.join(root, "..", "unified-models.json");
+    const unified = JSON.parse(fs.readFileSync(unifiedPath, "utf8"));
+    const vis = loadVisibility();
+    const models = (unified.models || []).map((m) => ({
+      slug: m.slug,
+      display_name: m.display_name || m.slug,
+      description: m.description || "",
+      enabled: vis[m.slug] !== false,
+    }));
+    return json(res, 200, { models });
+  } catch (e) {
+    return json(res, 500, { error: e?.message || "failed" });
+  }
+}
+
+async function handlePanelToggle(req, res) {
+  try {
+    const body = JSON.parse((await readBody(req)).toString("utf8"));
+    const { slug, enabled } = body;
+    if (!slug) return json(res, 400, { error: "slug required" });
+    const vis = loadVisibility();
+    vis[slug] = enabled === true;
+    saveVisibility(vis);
+    const count = regenerateCatalog(); // 自动重新生成 Codex catalog
+    return json(res, 200, { slug, enabled: vis[slug], catalog_models: count });
+  } catch (e) {
+    return json(res, 500, { error: e?.message || "failed" });
+  }
+}
+
+// 面板 HTML：读取独立文件 panel.html（与 server.mjs 同目录）
+const PANEL_FILE = path.join(root, "panel.html");
+function servePanel(res) {
+  try {
+    const html = fs.readFileSync(PANEL_FILE, "utf8");
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(html);
+  } catch (e) {
+    res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
+    res.end("panel.html 未找到: " + e.message);
+  }
+}
+
 async function handleListModels(req, res, url) {
   try {
     const { valid, auth } = authenticate(req);
@@ -564,7 +693,7 @@ async function handleListModels(req, res, url) {
       );
     } catch {}
     const seen = new Set(openaiModels.map((m) => m.slug));
-    const merged = [...openaiModels, ...extraModels.filter((m) => !seen.has(m.slug))];
+    const merged = [...openaiModels.filter((m) => isVisible(m.slug)), ...extraModels.filter((m) => !seen.has(m.slug) && isVisible(m.slug))];
     return json(res, 200, { models: merged });
   } catch (error) {
     console.error(JSON.stringify({ event: "list_models_error", error: error?.message || "failed" }));
@@ -579,6 +708,16 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "GET" && (url.pathname === "/v1/models" || url.pathname === "/models")) {
     return handleListModels(req, res, url);
+  }
+  // 面板端点
+  if (req.method === "GET" && url.pathname === "/panel/api/models") {
+    return handlePanelModels(req, res);
+  }
+  if (req.method === "POST" && url.pathname === "/panel/api/toggle") {
+    return handlePanelToggle(req, res);
+  }
+  if (req.method === "GET" && url.pathname === "/panel" || req.method === "GET" && url.pathname === "/panel/") {
+    return servePanel(res);
   }
   if (req.method === "GET" && url.pathname === "/routes") {
     return json(res, 200, {

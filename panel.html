@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Codex 模型开关面板</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:"Microsoft YaHei",sans-serif; background:#1a1a2e; color:#e0e0e0; padding:20px; max-width:900px; margin:0 auto; }
+h1 { font-size:20px; margin-bottom:6px; color:#fff; }
+.sub { color:#888; font-size:12px; margin-bottom:18px; }
+.search { width:100%; max-width:400px; padding:8px 12px; border-radius:6px; border:1px solid #333; background:#16213e; color:#e0e0e0; margin-bottom:16px; font-size:14px; }
+.model { display:flex; align-items:center; justify-content:space-between; padding:10px 14px; background:#16213e; border-radius:8px; margin-bottom:8px; border:1px solid #222; }
+.model:hover { border-color:#444; }
+.info { flex:1; }
+.name { font-size:14px; color:#fff; word-break:break-all; }
+.desc { font-size:11px; color:#888; margin-top:2px; }
+.switch { position:relative; width:44px; height:24px; flex-shrink:0; margin-left:12px; }
+.switch input { opacity:0; width:0; height:0; }
+.slider { position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:#444; border-radius:24px; transition:.3s; }
+.slider:before { position:absolute; content:""; height:18px; width:18px; left:3px; bottom:3px; background:#fff; border-radius:50%; transition:.3s; }
+input:checked + .slider { background:#4caf50; }
+input:checked + .slider:before { transform:translateX(20px); }
+.summary { margin-bottom:14px; font-size:13px; color:#aaa; }
+.group-title { font-size:13px; color:#4fc3f7; margin:18px 0 8px; font-weight:bold; }
+.actions { margin-top:16px; }
+.actions button { padding:8px 18px; border:none; border-radius:6px; color:#fff; cursor:pointer; margin-right:10px; font-size:13px; }
+.actions .on { background:#4caf50; }
+.actions .off { background:#f44336; }
+.toast { position:fixed; bottom:20px; right:20px; background:#333; color:#fff; padding:10px 16px; border-radius:6px; display:none; font-size:13px; z-index:99; }
+</style>
+</head>
+<body>
+<h1>🎛️ Codex 模型开关面板</h1>
+<div class="sub">切换模型的显示/隐藏。修改后自动生成 Codex 模型目录，重启 Codex 生效。</div>
+<input class="search" id="search" placeholder="搜索模型名称...">
+<div class="summary" id="summary"></div>
+<div id="list"></div>
+<div class="actions">
+  <button class="on" onclick="setAll(true)">全部显示</button>
+  <button class="off" onclick="setAll(false)">全部隐藏</button>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+let MODELS = [];
+async function load() {
+  const r = await fetch("/panel/api/models");
+  MODELS = (await r.json()).models || [];
+  render();
+}
+function groupOf(slug) {
+  if (slug.startsWith("opencode-go/")) return 0;
+  if (slug.startsWith("qwen-dashscope/")) return 1;
+  if (slug.startsWith("deepseek-") && !slug.startsWith("opencode-go/") && !slug.startsWith("qwen-dashscope/")) return 2;
+  return 3;
+}
+const LABELS = ["opencode-go 订阅 (25)", "阿里云 DashScope (22)", "DeepSeek (2)", "官方 ChatGPT (7)"];
+function render() {
+  const q = document.getElementById("search").value.toLowerCase();
+  const shown = MODELS.filter(m => m.slug.toLowerCase().includes(q));
+  const on = MODELS.filter(m => m.enabled).length;
+  document.getElementById("summary").textContent = "共 " + MODELS.length + " 个模型，当前显示 " + on + " 个";
+  const list = document.getElementById("list");
+  list.innerHTML = "";
+  for (let g = 0; g < 4; g++) {
+    const real = shown.filter(m => groupOf(m.slug) === g);
+    if (real.length === 0) continue;
+    const div = document.createElement("div");
+    div.className = "group-title";
+    div.textContent = LABELS[g];
+    list.appendChild(div);
+    for (const m of real) {
+      const row = document.createElement("div");
+      row.className = "model";
+      const info = document.createElement("div");
+      info.className = "info";
+      const nm = document.createElement("div");
+      nm.className = "name"; nm.textContent = m.slug;
+      const dc = document.createElement("div");
+      dc.className = "desc"; dc.textContent = m.description || "";
+      info.appendChild(nm); info.appendChild(dc);
+      const lbl = document.createElement("label");
+      lbl.className = "switch";
+      const cb = document.createElement("input");
+      cb.type = "checkbox"; cb.checked = m.enabled;
+      cb.onchange = function() { toggle(m.slug, this.checked); };
+      const sl = document.createElement("span");
+      sl.className = "slider";
+      lbl.appendChild(cb); lbl.appendChild(sl);
+      row.appendChild(info); row.appendChild(lbl);
+      list.appendChild(row);
+    }
+  }
+}
+async function toggle(slug, enabled) {
+  const r = await fetch("/panel/api/toggle", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug: slug, enabled: enabled }),
+  });
+  const d = await r.json();
+  toast((enabled ? "显示: " : "隐藏: ") + slug + "（目录已更新，重启 Codex 生效）");
+}
+async function setAll(v) {
+  for (const m of MODELS) {
+    if (m.enabled !== v) {
+      await fetch("/panel/api/toggle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug: m.slug, enabled: v }),
+      });
+    }
+  }
+  await load();
+  toast(v ? "全部显示（重启 Codex 生效）" : "全部隐藏（重启 Codex 生效）");
+}
+function toast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.style.display = "block";
+  setTimeout(function() { t.style.display = "none"; }, 2500);
+}
+document.getElementById("search").addEventListener("input", render);
+load();
+</script>
+</body>
+</html>
