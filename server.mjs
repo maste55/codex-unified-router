@@ -190,7 +190,7 @@ function convertChatToResponses(chatBody, model) {
   const output = [];
   if (choices.length > 0) {
     const m = choices[0]?.message || {};
-    if (m.reasoning_content) output.push({ type: "reasoning", id: "rs_" + Date.now(), status: "completed", summary: [{ type: "summary_text", text: String(m.reasoning_content).slice(0, 500) }], content: [{ type: "reasoning_text", text: String(m.reasoning_content) }] });
+    if (m.reasoning_content) output.push({ type: "reasoning", id: "rs_" + Date.now(), status: "completed", summary: [{ type: "summary_text", text: String(m.reasoning_content) }], content: [{ type: "reasoning_text", text: String(m.reasoning_content) }] });
     if (Array.isArray(m.tool_calls)) for (const tc of m.tool_calls) output.push({ type: "function_call", id: tc.id || ("call_" + Date.now()), call_id: tc.id || ("call_" + Date.now()), name: tc.function?.name || "function", arguments: tc.function?.arguments || "{}", status: "completed" });
     const contentText = typeof m.content === "string" ? m.content : "";
     if (contentText) output.push({ type: "message", id: "msg_" + Date.now(), role: "assistant", status: "completed", content: [{ type: "output_text", text: contentText, annotations: [] }] });
@@ -222,16 +222,18 @@ function serializeResponsesSSE(resp, requestId) {
     const copy = { ...item, id: item.id || ("evt_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6)) };
     events.push({ type: "response.output_item.added", output_index: events.filter(e => e.type === "response.output_item.added").length, item: copy });
     if (item.type === "reasoning") {
-      // 思考过程专用事件（OpenAI 官方格式：part.added → text.delta → part.done）
+      // 思考过程专用事件：完整文本(reasoning_text) + 摘要(summary_text) 双通道
       const rid = copy.id || ("rs_" + Date.now());
-      const rtext = (item.summary && item.summary[0]?.text) || (item.content && item.content[0]?.text) || "";
+      const full = (item.content && item.content[0]?.text) || (item.summary && item.summary[0]?.text) || "";
+      const summ = (item.summary && item.summary[0]?.text) || full;
       const outIdx = events.filter(e => e.type === "response.output_item.added").length - 1;
-      // 1. reasoning summary part 添加
-      events.push({ type: "response.reasoning_summary_part.added", item_id: rid, output_index: outIdx, content_index: 0, summary: [{ type: "summary_text", text: rtext }] });
-      // 2. 思考文本增量（Codex 界面显示思考内容的来源）
-      events.push({ type: "response.reasoning_summary_text.delta", item_id: rid, output_index: outIdx, content_index: 0, delta: rtext });
-      // 3. part 完成
-      events.push({ type: "response.reasoning_summary_part.done", item_id: rid, output_index: outIdx, content_index: 0, summary: [{ type: "summary_text", text: rtext }] });
+      // A. 完整思考文本事件（Codex 折叠块显示完整思考）
+      events.push({ type: "response.reasoning_text.delta", item_id: rid, output_index: outIdx, content_index: 0, delta: full });
+      events.push({ type: "response.reasoning_text.done", item_id: rid, output_index: outIdx, content_index: 0, text: full });
+      // B. 摘要事件（官方标准格式）
+      events.push({ type: "response.reasoning_summary_part.added", item_id: rid, output_index: outIdx, content_index: 0, summary: [{ type: "summary_text", text: summ }] });
+      events.push({ type: "response.reasoning_summary_text.delta", item_id: rid, output_index: outIdx, content_index: 0, delta: summ });
+      events.push({ type: "response.reasoning_summary_part.done", item_id: rid, output_index: outIdx, content_index: 0, summary: [{ type: "summary_text", text: summ }] });
     }
     if (item.type === "message") {
       const textParts = (item.content || []).filter(c => c.type === "output_text" || c.type === "text");
