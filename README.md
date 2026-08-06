@@ -1,54 +1,62 @@
-# Codex Unified Router（模型网关）
+# Codex 官方模型桥 + 统一路由（可分享版）
 
-让 **Codex 桌面版**的模型选择器同时显示 **ChatGPT 模型 + DeepSeek（flash）模型**，并按模型自动分流请求的本地轻量网关。
+让 Codex 同时使用 **ChatGPT 官方模型**（gpt-5.6-sol/luna/terra 等）和 **DeepSeek**，通过本地 unified-router 分流。
 
-```
-Codex 桌面版 → unified-router(127.0.0.1:4791)
-                ├─ gpt-5.6-sol 等 → chatgpt-web daemon(17841) → ChatGPT 会话
-                └─ deepseek-v4-flash / deepseek-v4-pro → api.deepseek.com（你的 API Key）
-```
+> 核心：`codex-bridge.mjs`（7.3KB 零依赖独立桥，替代第三方 codex-chatgpt-web 浏览器方案）
 
-## 解决的问题
+## 文件清单
 
-- Codex 桌面版的模型选择器默认只显示它连接的后端提供的模型。
-- 本网关把 **ChatGPT 的模型目录** 与 **DeepSeek 模型目录** 合并返回（12 个模型，含 `deepseek-v4-flash`），并让 `/v1/responses` 按模型名分流到对应后端。
-- 额外收益：`deepseek-*` 请求走**你自己的 DeepSeek API 额度**，不受 ChatGPT Plus 用量限制。
+| 文件 | 作用 | 需要改？ |
+|---|---|---|
+| `codex-bridge.mjs` | 独立桥：转发官方模型到 chatgpt.com backend-api（端口 17841） | ❌ 不用 |
+| `server.mjs` | unified-router：按模型名分流（deepseek → DeepSeek API；其他 → 桥） | ❌ 不用 |
+| `watchdog.mjs` | 2 秒守护 4791/17841，桥挂自动拉起 | ❌ 不用 |
+| `start-all.ps1` | 开机自启（计划任务调用） | ❌ 不用 |
+| `router.config.json` | 路由配置 | ✅ **改 auth 路径** |
+| `unified-models.json` | 模型目录（9 个模型） | 可选 |
+| `config.env.example` | **DeepSeek API Key 填写模板** | ✅ **必填 key** |
+| `install.cmd` | **一键安装脚本**（推荐直接用这个） | ❌ 不用 |
+| `install-node.ps1` | **Node.js 自动安装器**（无 Node 时自动下载便携版） | ❌ 不用 |
+| `skills/deepseek-usage-panel/` | **DeepSeek 消费面板 skill**（查看余额/今日本周消耗） | ❌ 不用 |
+| `usage-status/` | 面板程序（tkinter 悬浮小窗，读 `DEEPSEEK_API_KEY`） | ⚠️ 需改占位符路径 |
 
-## 组件
+## 快速开始（推荐：双击 install.cmd）
 
-| 文件 | 作用 |
-|---|---|
-| `server.mjs` | 网关核心（Node.js，无需依赖，`node server.mjs` 即跑） |
-| `router.config.json` | 网关配置（端口、上游地址、key 文件路径） |
-| `unified-models.json` | 模型目录（含 deepseek 模型，供网关合并） |
-| `start-all.ps1` / `start-router.ps1` / `stop-router.ps1` | 启停脚本 |
-| `smoke-test.mjs` | 连通性自检 |
-| `build-catalog.mjs` | 从 DeepSeek 官方 models 接口重建模型目录 |
+1. 解压本包，双击 `install.cmd`
+2. **没有 Node.js 也不怕**：脚本自动检测，没有（或版本 < 18）会自动下载 Node.js 便携版到 `~\.codex-bridge\nodejs\`（无需管理员权限）
+3. 脚本会**自动打开 config.env** 让你粘贴 DeepSeek API Key（获取：https://platform.deepseek.com/api_keys）
+4. 脚本自动拷贝文件、追加 Codex 配置、**自动安装 DeepSeek 消费面板 skill**、启动服务
+5. 按脚本提示验证 17841/4791
+
+## DeepSeek 消费面板（随包附带）
+
+- 功能：置顶悬浮小窗，实时显示 DeepSeek 账户余额、今日/本周累计消耗、每条会话 token 费用估算
+- 依赖：**Python 3 + tkinter**（Windows 官方 Python 自带），需设置 `DEEPSEEK_API_KEY` 环境变量
+- 使用：安装后调用 `$deepseek-usage-panel` 技能，或直接运行
+  ```powershell
+  powershell -File ~\.codex\skills\deepseek-usage-panel\scripts\usage-panel.ps1 -Action start
+  ```
+- 注意：`usage-panel.ps1` 里的 `<USAGE_DIR>` / `<PYTHONW>` 占位符需改为你本机的实际路径
+
+> 注意：`install.cmd` 里桥的启动路径写的是本包解压目录，如未放在固定位置请手动启动桥：
+> ```powershell
+> cd 本包目录 && node codex-bridge.mjs
+> ```
+
+## 手动安装（可选）
+
+1. **Node.js ≥ 18**（`node --version` 验证）
+2. **已登录 Codex**（`~/.codex/auth.json` 存在，含 ChatGPT access_token）
+3. **DeepSeek API key**（可选：不用 deepseek 可跳过）
 
 ## 安装步骤
 
-### 1. 前置条件
+### 1. 放置文件
 
-- Windows + **Codex 桌面版**（已登录）
-- **codex-chatgpt-web launcher**（>= 1.1.2，提供 17841 daemon 和 ChatGPT 浏览器会话）
-- **Node.js**（>= 18）
-- **DeepSeek 开放平台账号**（有 API Key）
+把本目录所有文件放到：`C:\Users\<你的用户名>\.codex\unified-router\`
+（`unified-models.json` 放 `~/.codex/` 下）
 
-### 2. 放置文件
-
-```powershell
-# 把本仓库内容放到：
-mkdir $env:USERPROFILE\.codex\unified-router
-# 复制 server.mjs、unified-models.json、*.ps1、router.config.json 到该目录
-```
-
-### 3. 配置
-
-复制模板并编辑：
-
-```powershell
-Copy-Item router.config.json.example router.config.json
-```
+### 2. 修改配置 `router.config.json`
 
 ```json
 {
@@ -57,70 +65,65 @@ Copy-Item router.config.json.example router.config.json
   "maxBodyBytes": 134217728,
   "openaiBaseUrl": "http://127.0.0.1:17841/v1",
   "deepseekBaseUrl": "https://api.deepseek.com",
-  "deepseekEnvFile": "./.env.deepseek",
-  "codexAuthFile": "C:/Users/<你的用户名>/.codex/auth.json"
+  "deepseekEnvFile": "<你的 .env 文件路径，含 DEEPSEEK_API_KEY>",
+  "codexAuthFile": "<你的 auth.json 路径，默认 C:/Users/<用户名>/.codex/auth.json>"
 }
 ```
 
-创建 `.env.deepseek`（放 DeepSeek Key，**不要提交到 git**）：
-
-```ini
-AI_API_KEY=sk-你的DeepSeek密钥
-```
-
-`codexAuthFile` 指向 Codex 的 `auth.json`（网关用它读取 ChatGPT 登录 token 做本地鉴权与转发）。
-
-### 4. 指向网关
-
-编辑 `C:\Users\<你>\.codex\config.toml`：
+### 3. 修改 Codex 配置 `~/.codex/config.toml`
 
 ```toml
-openai_base_url = "http://127.0.0.1:4791/v1"
-model = "gpt-5.6-sol"
+model_provider = "unified-router"
+model = "gpt-5.6-sol"   # 或 deepseek-v4-flash
+
+[model_providers.unified-router]
+name = "unified-router"
+base_url = "http://127.0.0.1:4791/v1"
+wire_api = "responses"
+env_key = "CODEX_UNIFIED_ROUTER_KEY"
 ```
 
-> 若使用 codex-chatgpt-web launcher 管理配置，需同步更新它的集成日志
-> `~/.codex-chatgpt-web/codex/integration-journal.json` 中 `installed.openai_base_url` 为同一地址，否则 launcher 会报 "openai_base_url changed after setup"。
-
-### 5. 启动
+### 4. 启动
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File start-all.ps1
+# 启动桥 (17841)
+cd C:\Users\<用户名>\AppData\Roaming\reasonix\global-workspace\.codex-bridge
+node codex-bridge.mjs
+
+# 启动 router (4791)
+cd C:\Users\<用户名>\.codex\unified-router
+node server.mjs
 ```
 
-检查：
-
+验证：
 ```powershell
-curl http://127.0.0.1:4791/health
-# → {"status":"ok","version":1,"routes":["openai","deepseek"]}
+curl http://localhost:17841/healthz     # 应返回 {"service":"codex-bridge"}
+curl http://localhost:4791/v1/models    # 应列出 9 个模型
 ```
 
-### 6. 开机自启（可选）
+### 5. 开机自启（可选）
 
-```powershell
-$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "<你的目录>\start-all.ps1"'
-Register-ScheduledTask -TaskName 'CodexUnifiedModelRouter' -Action $action -Trigger (New-ScheduledTaskTrigger -AtLogOn) -Force
+计划任务 → 创建任务 → 登录时触发：
+```
+程序: powershell.exe
+参数: -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\Users\<用户名>\.codex\unified-router\start-all.ps1
 ```
 
-### 7. 重启 Codex
+## 模型路由规则
 
-模型选择器将出现 `deepseek-v4-flash` / `deepseek-v4-pro`（与 ChatGPT 模型并列）。
-
-## 鉴权说明
-
-- 网关本身要求 `Authorization: Bearer <auth.json 里的 access_token>`（Codex 桌面版会自动携带）。
-- 转发 ChatGPT 请求时复用该 token；转发 DeepSeek 请求时改用 `.env.deepseek` 里的 `AI_API_KEY`。
-
-## 故障排查
-
-| 症状 | 排查 |
+| 模型名 | 路由 |
 |---|---|
-| `502 Unified model router failed` | 17841 daemon 没起来：`start-all.ps1` 起它；或 `curl http://127.0.0.1:17841/v1/models` 看 daemon |
-| `426 Upgrade Required` | 网关不支持 websocket——Codex 桌面版走 HTTP 流不受影响；CLI 直连会报此错 |
-| 模型列表无 deepseek | 确认 `.env.deepseek` 存在且 `unified-models.json` 含 `deepseek-*` |
-| launcher 报 "openai_base_url changed after setup" | 同步 journal 的 `installed.openai_base_url` 为 4791 |
-| DeepSeek 请求失败 | 检查 `.env.deepseek` 的 `AI_API_KEY` 是否有效（DeepSeek 控制台） |
+| `gpt-5.6-sol` / `gpt-5.6-terra` / `gpt-5.6-luna` / `gpt-5.5` / `gpt-5.4` / `gpt-5.4-mini` / `gpt-5.3-codex-spark` | → 桥 (17841) → chatgpt.com 官方后端 |
+| `deepseek-v4-flash` / `deepseek-v4-pro` | → api.deepseek.com |
 
-## 安全
+## 常见问题
 
-- 本仓库**不含任何密钥**：DeepSeek Key 在 `.env.deepseek`、ChatGPT token 在 Codex 的 `auth.json`，均被 `.gitignore` 排除，请勿提交。
+- **429 usage_limit_reached**：ChatGPT 账号额度用完，等重置或升级，非桥故障。
+- **"Local router authentication failed"**：auth.json 的 token 与请求头不一致，重新登录 Codex。
+- **官方模型不显示**：确认 `codex-bridge.mjs` 在运行、`unified-models.json` 存在。
+- **deepseek 报错**：检查 `deepseekEnvFile` 指向的 `.env` 里 `DEEPSEEK_API_KEY` 是否有效。
+
+## 安全提示
+
+- **绝不要把 `~/.codex/auth.json`、API key、`.env` 分享给别人**——那是你的登录凭证。
+- 本包已脱敏，不含任何个人密钥；分享此包前建议再自查一遍。

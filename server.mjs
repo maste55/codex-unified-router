@@ -1,10 +1,11 @@
 import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Readable } from "node:stream";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { zstdDecompressSync } from "node:zlib";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -114,6 +115,84 @@ function decodedBody(body, encoding = "") {
 function sanitizeDeepSeekBody(body, encoding = "") {
   const value = JSON.parse(decodedBody(body, encoding).toString("utf8"));
   delete value.service_tier;
+  return Buffer.from(JSON.stringify(value));
+}
+
+function imageToText(imagePath) {
+  const script = "<你的技能目录>/scripts/vlm-vision.ps1";
+  const prompt =
+    "请完整、逐行描述这张图片的内容：包括所有文字（逐字提取）、数字、表格、图表、界面元素、布局与颜色，按从上到下、从左到右的顺序输出，不要遗漏，不要解读，只输出观察到的内容。";
+  // 优先本地视觉（Ollama qwen2.5vl，离线可用），失败再降级 GLM 云端
+  const attempts = [
+    { channel: "local", apiKey: "ollama", timeoutMs: 200000 },
+    { channel: "glm", apiKey: "", timeoutMs: 120000 },
+  ];
+  let lastErr = "";
+  for (const a of attempts) {
+    try {
+      const args = [
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script,
+        "-ImagePath", imagePath, "-Prompt", prompt,
+        "-Channel", a.channel, "-Json", "-TimeoutSec", String(Math.floor(a.timeoutMs / 1000)),
+      ];
+      if (a.apiKey) args.push("-ApiKey", a.apiKey);
+      const out = execFileSync("powershell.exe", args, {
+        encoding: "utf8", timeout: a.timeoutMs + 10000, windowsHide: true, maxBuffer: 16 * 1024 * 1024,
+      });
+      const j = JSON.parse(out);
+      const text = j && (j.result || j.content);
+      if (text && String(text).trim()) return String(text).trim();
+      lastErr = `${a.channel}: empty result`;
+    } catch (e) {
+      lastErr = `${a.channel}: ${String((e && e.message) || e).slice(0, 160)}`;
+    }
+  }
+  return `[图片读取失败: ${lastErr}]`;
+}
+
+function convertImagesToText(bodyBuffer) {
+  let value;
+  try {
+    value = JSON.parse(bodyBuffer.toString("utf8"));
+  } catch {
+    return bodyBuffer;
+  }
+  let changed = false;
+  const convertItem = (item) => {
+    if (!item || typeof item !== "object") return item;
+    if (item.type === "input_image" || item.type === "image_url") {
+      const dataUrl = typeof item.image_url === "string" ? item.image_url : (item.image_url && item.image_url.url);
+      let desc = "[图片无法读取：不是本地 base64 图片]";
+      let file = null;
+      if (typeof dataUrl === "string" && dataUrl.startsWith("data:image")) {
+        const m = dataUrl.match(/^data:image\/(\w+);base64,(.+)$/s);
+        if (m) {
+          const ext = m[1] === "jpeg" ? "jpg" : m[1];
+          file = path.join(os.tmpdir(), `router-vision-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);
+          fs.writeFileSync(file, Buffer.from(m[2], "base64"));
+        }
+      }
+      if (file) {
+        try {
+          desc = imageToText(file);
+        } catch (e) {
+          desc = `[图片读取失败: ${String((e && e.message) || e).slice(0, 200)}]`;
+        } finally {
+          try { fs.unlinkSync(file); } catch {}
+        }
+      }
+      changed = true;
+      return { type: "input_text", text: `[用户附带的图片，已由视觉模型(GLM-4V)转为文字]
+${desc}` };
+    }
+    if (Array.isArray(item.content)) {
+      item.content = item.content.map(convertItem);
+    }
+    return item;
+  };
+  if (Array.isArray(value.input)) value.input = value.input.map(convertItem);
+  if (Array.isArray(value.messages)) value.messages = value.messages.map(convertItem);
+  if (!changed) return bodyBuffer;
   return Buffer.from(JSON.stringify(value));
 }
 
@@ -255,6 +334,7 @@ async function proxy(req, res) {
       const env = parseEnvFile(config.deepseekEnvFile);
       if (!env.AI_API_KEY) throw new Error("DeepSeek API key is unavailable");
       body = sanitizeDeepSeekBody(incomingBody, incomingEncoding);
+      body = convertImagesToText(body);
       headers = deepSeekHeaders(env.AI_API_KEY, req.headers);
       baseUrl = config.deepseekBaseUrl;
     } else {
@@ -302,12 +382,21 @@ async function handleListModels(req, res, url) {
     if (!valid) return json(res, 401, { error: "Local router authentication failed" });
     const clientVersion = url.searchParams.get("client_version") || "0.146.0";
     const upstreamUrl = new URL(`/v1/models?client_version=${encodeURIComponent(clientVersion)}`, `${config.openaiBaseUrl.replace(/\/$/, "")}/`);
-    const upstream = await fetch(upstreamUrl, {
-      headers: { authorization: `Bearer ${auth.accessToken}`, accept: "application/json" },
-      signal: AbortSignal.timeout(60000),
-    });
-    const data = await upstream.json();
-    const openaiModels = Array.isArray(data?.models) ? data.models : [];
+    let openaiModels = [];
+    try {
+      const upstream = await fetch(upstreamUrl, {
+        headers: { authorization: `Bearer ${auth.accessToken}`, accept: "application/json" },
+        signal: AbortSignal.timeout(60000),
+      });
+      if (upstream.ok) {
+        const data = await upstream.json();
+        openaiModels = Array.isArray(data?.models) ? data.models : [];
+      } else {
+        console.error(JSON.stringify({ event: "list_models_upstream_unavailable", status: upstream.status }));
+      }
+    } catch (error) {
+      console.error(JSON.stringify({ event: "list_models_upstream_unavailable", error: error?.message || "failed" }));
+    }
     // 合并 deepseek 模型（从 unified-models.json 读取）
     let deepseekModels = [];
     try {
