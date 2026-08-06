@@ -4,9 +4,9 @@
 )
 $ErrorActionPreference = 'Stop'
 
-$base = '<USAGE_DIR>'
+$base = 'C:\Users\linjin\.codex\usage-status'
 $script = Join-Path $base 'codex_usage_status.pyw'
-$pyw = '<PYTHONW>'
+$pyw = 'C:\Users\linjin\AppData\Local\Programs\Python\Python312\pythonw.exe'
 $log = Join-Path $base 'logs\usage-status.log'
 $install = Join-Path $base 'install.ps1'
 
@@ -59,8 +59,10 @@ switch ($Action) {
         } else {
             if (-not (Test-Path $script)) { throw "missing $script" }
             if (-not (Test-Path $pyw)) { throw "missing $pyw" }
-            Start-Process -FilePath $pyw -ArgumentList "`"$script`""
-            Start-Sleep -Seconds 4
+            # 用 explorer 启动，确保进入用户桌面会话（Session 1），窗口正常显示
+            # （直接 Start-Process pythonw 会进入非交互上下文，面板不定时静默退出）
+            Start-Process -FilePath explorer.exe -ArgumentList "`"$script`""
+            Start-Sleep -Seconds 5
             $proc = Get-PanelProcess
             if ($proc) {
                 Write-Output "panel=started"

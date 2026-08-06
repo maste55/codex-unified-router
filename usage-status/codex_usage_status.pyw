@@ -791,21 +791,6 @@ class UsageStatusApp:
                 self.root.winfo_width(), self.root.winfo_height(),
                 self.root.winfo_x(), self.root.winfo_y()))
 
-    def _force_topmost(self):
-        """强制置顶（HWND_TOPMOST 强化）：即使 Codex 全屏/抢焦点，面板仍在上层。"""
-        try:
-            hwnd = self.root.winfo_id()
-            hwnd = ctypes.windll.user32.GetParent(hwnd) if ctypes.windll.user32.GetParent(hwnd) else hwnd
-            SWP_NOSIZE = 0x0001
-            SWP_NOMOVE = 0x0002
-            SWP_NOACTIVATE = 0x0010
-            HWND_TOPMOST = -1
-            ctypes.windll.user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                                              SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE)
-            log("topmost reinforced")
-        except Exception as exc:
-            log("topmost error: %s" % exc)
-
     def _hide_window(self):
         if self.visible:
             self.root.withdraw()
@@ -896,7 +881,6 @@ class UsageStatusApp:
             running = self._codex_running()
             if running:
                 self._show_window()
-                self._force_topmost()
                 self.reader.refresh()
                 self._render(self.reader.snapshot())
             else:
