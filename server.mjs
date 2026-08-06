@@ -128,6 +128,76 @@ function sanitizeDeepSeekBody(body, encoding = "") {
   return Buffer.from(JSON.stringify(value));
 }
 
+// ===== Responses -> DeepSeek Chat 转换层 (v1.0) =====
+function convertResponsesToChat(responsesBody) {
+  const msgs = [];
+  const input = Array.isArray(responsesBody.input) ? responsesBody.input : [];
+  for (const item of input) {
+    if (!item || typeof item !== "object") continue;
+    const role = item.role || "user";
+    if (role === "system") { const txt = extractItemText(item); if (txt) msgs.push({ role: "system", content: txt }); continue; }
+    if (role === "user") {
+      const ctype = item.type || (Array.isArray(item.content) ? item.content[0]?.type : "");
+      if (ctype === "function_call_output" || item.type === "function_call_output") {
+        let cid = item.call_id || ""; let cval = item.output;
+        if (!cval && Array.isArray(item.content) && item.content[0]) cval = item.content[0].output || item.content[0].text || "";
+        msgs.push({ role: "tool", tool_call_id: cid, content: String(cval ?? "") });
+      } else { const txt = extractItemText(item); msgs.push({ role: "user", content: txt || "" }); }
+      continue;
+    }
+    if (role === "assistant") {
+      const msg = { role: "assistant" };
+      const txt = extractItemText(item);
+      msg.content = txt || "";
+      if (Array.isArray(item.reasoning) && item.reasoning.length > 0) { const rtxt = extractReasoningText(item.reasoning); if (rtxt) msg.reasoning_content = rtxt; }
+      else if (item.reasoning_content) msg.reasoning_content = String(item.reasoning_content);
+      const toolCalls = [];
+      if (Array.isArray(item.output)) for (const o of item.output) {
+        if (o?.type === "function_call") toolCalls.push({ id: o.call_id || ("call_" + Date.now()), type: "function", function: { name: o.name || "function", arguments: typeof o.arguments === "string" ? o.arguments : JSON.stringify(o.arguments || {}) } });
+      }
+      if (toolCalls.length) msg.tool_calls = toolCalls;
+      msgs.push(msg); continue;
+    }
+    const txt = extractItemText(item);
+    msgs.push({ role: "user", content: txt || "" });
+  }
+  return msgs;
+}
+function extractItemText(item) {
+  if (!item) return "";
+  if (typeof item.content === "string") return item.content;
+  if (Array.isArray(item.content)) return item.content.map((c) => {
+    if (typeof c === "string") return c;
+    if (c?.type === "input_text" || c?.type === "output_text" || c?.type === "text") return c.text || "";
+    if (c?.type === "input_image") return "[image]";
+    return "";
+  }).join("");
+  return "";
+}
+function extractReasoningText(reasoning) {
+  if (!Array.isArray(reasoning)) return "";
+  const parts = [];
+  for (const r of reasoning) {
+    if (typeof r === "string") { parts.push(r); continue; }
+    if (r?.content && Array.isArray(r.content)) for (const c of r.content) { if (c?.type === "reasoning_text" || c?.type === "summary_text" || c?.type === "text") parts.push(c.text || ""); }
+    if (r?.summary && Array.isArray(r.summary)) for (const s of r.summary) parts.push(s?.text || "");
+    if (r?.text) parts.push(r.text);
+  }
+  return parts.join("");
+}
+function convertChatToResponses(chatBody, model) {
+  const choices = chatBody?.choices || [];
+  const output = [];
+  if (choices.length > 0) {
+    const m = choices[0]?.message || {};
+    if (m.reasoning_content) output.push({ type: "reasoning", id: "rs_" + Date.now(), status: "completed", summary: [{ type: "summary_text", text: String(m.reasoning_content).slice(0, 500) }], content: [{ type: "reasoning_text", text: String(m.reasoning_content) }] });
+    if (Array.isArray(m.tool_calls)) for (const tc of m.tool_calls) output.push({ type: "function_call", id: tc.id || ("call_" + Date.now()), call_id: tc.id || ("call_" + Date.now()), name: tc.function?.name || "function", arguments: tc.function?.arguments || "{}", status: "completed" });
+    const contentText = typeof m.content === "string" ? m.content : "";
+    if (contentText) output.push({ type: "message", id: "msg_" + Date.now(), role: "assistant", status: "completed", content: [{ type: "output_text", text: contentText, annotations: [] }] });
+  }
+  return { id: chatBody?.id || ("resp_" + Date.now()), object: "response", created_at: chatBody?.created || Math.floor(Date.now() / 1000), status: "completed", model: model || chatBody?.model || "", output, usage: chatBody?.usage || { input_tokens: 0, output_tokens: 0, total_tokens: 0 } };
+}
+
 function safeModel(body, encoding = "") {
   try {
     const value = JSON.parse(decodedBody(body, encoding).toString("utf8"));
@@ -265,9 +335,21 @@ async function proxy(req, res) {
     if (isDeepSeek) {
       const env = parseEnvFile(config.deepseekEnvFile);
       if (!env.AI_API_KEY) throw new Error("DeepSeek API key is unavailable");
-      body = sanitizeDeepSeekBody(incomingBody, incomingEncoding);
+      let parsed = {};
+      try { parsed = JSON.parse(decodedBody(incomingBody, incomingEncoding).toString("utf8")); } catch {}
+      const messages = convertResponsesToChat(parsed);
+      const chatBody = { model: parsed.model || model, messages, stream: false, temperature: parsed.temperature, max_tokens: parsed.max_output_tokens || parsed.max_tokens };
+      if (Array.isArray(parsed.tools)) {
+        const allowed = new Set(["apply_patch", "web_search", "function"]);
+        const tools = parsed.tools.filter((tt) => { const name = tt?.type === "function" ? tt?.function?.name : tt?.type || tt?.name; return name && allowed.has(String(name).toLowerCase()); }).map((tt) => { if (tt?.type === "function") return tt; return { type: "function", function: { name: tt?.name || tt?.type || "function", description: "", parameters: { type: "object", properties: {} } } }; });
+        if (tools.length) chatBody.tools = tools;
+      }
+      body = Buffer.from(JSON.stringify(chatBody));
       headers = deepSeekHeaders(env.AI_API_KEY, req.headers);
-      baseUrl = config.deepseekBaseUrl;
+      baseUrl = "https://api.deepseek.com";
+      req.url = "/v1/chat/completions";
+      headers["content-type"] = "application/json";
+      delete headers["openai-beta"];
     } else {
       headers = copyOpenAIHeaders(req.headers, auth);
       baseUrl = config.openaiBaseUrl;
@@ -281,7 +363,27 @@ async function proxy(req, res) {
       redirect: "manual",
     });
     const status = upstream.status;
+    if (route === "deepseek" && (status === 400 || status === 422)) {
+      console.error(JSON.stringify({ event: "deepseek_error_body", status, body: body.toString("utf8").slice(0, 4000) }));
+    }
     res.statusCode = upstream.status;
+    if (route === "deepseek") {
+      const rawText = await upstream.text();
+      try {
+        const chatResp = JSON.parse(rawText);
+        const resp = convertChatToResponses(chatResp, model);
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify(resp));
+        console.log(JSON.stringify({ time: new Date().toISOString(), route, model, status, durationMs: Date.now() - started, converted: true }));
+        return;
+      } catch (e) {
+        console.error(JSON.stringify({ event: "chat_convert_fail", error: e?.message || String(e) }));
+        res.setHeader("content-type", "application/json");
+        res.end(rawText);
+        console.log(JSON.stringify({ time: new Date().toISOString(), route, model, status, durationMs: Date.now() - started, converted: false }));
+        return;
+      }
+    }
     copyResponseHeaders(upstream, res);
     if (upstream.body) {
       const stream = Readable.fromWeb(upstream.body);
@@ -349,6 +451,7 @@ const server = http.createServer(async (req, res) => {
       deepseek: "deepseek-* model ids",
     });
   }
+  if (req.method === "GET") return proxy(req, res);
   if (req.method !== "POST") return json(res, 405, { error: "Method not allowed" });
   return proxy(req, res);
 });
