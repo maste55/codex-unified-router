@@ -211,6 +211,33 @@ function convertChatToResponses(chatBody, model) {
   return { id: chatBody?.id || ("resp_" + Date.now()), object: "response", created_at: chatBody?.created || Math.floor(Date.now() / 1000), status: "completed", model: model || chatBody?.model || "", output, usage };
 }
 
+function aggregateDeepSeekSSE(sseText) {
+  // deepseek SSE -> chat.completions JSON
+  const lines = String(sseText).split(/\r?\n/);
+  let model = "", created = Math.floor(Date.now() / 1000), id = "chatcmpl_" + Date.now();
+  let content = "", reasoning = "", finish = null;
+  let usage = null;
+  for (const line of lines) {
+    if (!line.startsWith("data:")) continue;
+    const payload = line.slice(5).trim();
+    if (!payload || payload === "[DONE]") continue;
+    try {
+      const chunk = JSON.parse(payload);
+      if (chunk.id) id = chunk.id;
+      if (chunk.model) model = chunk.model;
+      if (chunk.created) created = chunk.created;
+      const delta = chunk.choices?.[0]?.delta || {};
+      if (typeof delta.reasoning_content === "string") reasoning += delta.reasoning_content;
+      if (typeof delta.content === "string") content += delta.content;
+      if (chunk.choices?.[0]?.finish_reason) finish = chunk.choices[0].finish_reason;
+      if (chunk.usage) usage = chunk.usage;
+    } catch {}
+  }
+  const choice = { index: 0, message: { role: "assistant", content }, finish_reason: finish || "stop" };
+  if (reasoning) choice.message.reasoning_content = reasoning;
+  return { id, object: "chat.completion", created, model, choices: [choice], usage: usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
+}
+
 function serializeResponsesSSE(resp, requestId) {
   // 将 Responses JSON 转成 OpenAI 兼容 SSE 事件流（Codex 期望的格式）
   const events = [];
@@ -398,7 +425,18 @@ async function proxy(req, res) {
       let parsed = {};
       try { parsed = JSON.parse(decodedBody(incomingBody, incomingEncoding).toString("utf8")); } catch {}
       const messages = convertResponsesToChat(parsed);
-      const chatBody = { model: parsed.model || model, messages, stream: false, temperature: parsed.temperature, max_tokens: parsed.max_output_tokens || parsed.max_tokens };
+      // 透传 Codex 的 reasoning 参数；deepseek 需显式 thinking enabled 才有思考内容
+      let reasoningEffort = parsed.reasoning?.effort || "high";
+      if (reasoningEffort === "minimal") reasoningEffort = "low";
+      const chatBody = {
+        model: parsed.model || model,
+        messages,
+        stream: true,
+        temperature: parsed.temperature,
+        max_tokens: parsed.max_output_tokens || parsed.max_tokens,
+        reasoning_effort: reasoningEffort,
+        thinking: { type: "enabled" },
+      };
       if (Array.isArray(parsed.tools)) {
         const allowed = new Set(["apply_patch", "web_search", "function"]);
         const tools = parsed.tools.filter((tt) => { const name = tt?.type === "function" ? tt?.function?.name : tt?.type || tt?.name; return name && allowed.has(String(name).toLowerCase()); }).map((tt) => { if (tt?.type === "function") return tt; return { type: "function", function: { name: tt?.name || tt?.type || "function", description: "", parameters: { type: "object", properties: {} } } }; });
@@ -428,7 +466,21 @@ async function proxy(req, res) {
     }
     res.statusCode = upstream.status;
     if (route === "deepseek") {
-      const rawText = await upstream.text();
+      // deepseek 现在 stream:true（返回 SSE），需聚合为完整 JSON
+      let rawText;
+      try {
+        const upstreamText = await upstream.text();
+        const ctype = upstream.headers.get("content-type") || "";
+        if (ctype.includes("text/event-stream") || upstreamText.includes("data: [DONE]") || upstreamText.includes("data: {") ) {
+          // 聚合 SSE chunks → 完整 chat 响应
+          rawText = JSON.stringify(aggregateDeepSeekSSE(upstreamText));
+        } else {
+          rawText = upstreamText;
+        }
+      } catch (e) {
+        rawText = "{}";
+        console.error(JSON.stringify({ event: "deepseek_stream_read_fail", error: e?.message || String(e) }));
+      }
       try {
         const chatResp = JSON.parse(rawText);
         const resp = convertChatToResponses(chatResp, model);
