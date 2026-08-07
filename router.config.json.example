@@ -4,6 +4,6 @@
   "maxBodyBytes": 134217728,
   "openaiBaseUrl": "http://127.0.0.1:17841/v1",
   "deepseekBaseUrl": "https://api.deepseek.com",
-  "deepseekEnvFile": "./.env.deepseek",
-  "codexAuthFile": "<你的Codex目录>/auth.json"
+  "deepseekEnvFile": "<DEEPSEEK_ENV_FILE>",
+  "codexAuthFile": "<CODEX_HOME>/auth.json"
 }

@@ -1,9 +1,0 @@
-{
-  "listenHost": "127.0.0.1",
-  "listenPort": 4791,
-  "maxBodyBytes": 134217728,
-  "openaiBaseUrl": "http://127.0.0.1:17841/v1",
-  "deepseekBaseUrl": "https://api.deepseek.com",
-  "deepseekEnvFile": "./config.env",
-  "codexAuthFile": "<你的auth.json路径，默认 ~/.codex/auth.json>"
-}
