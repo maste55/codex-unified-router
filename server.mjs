@@ -116,10 +116,16 @@ function sanitizeDeepSeekBody(body, encoding = "") {
   delete value.service_tier;
   // filter exec tool (DeepSeek only supports apply_patch/web_search/function)
   if (Array.isArray(value.tools)) {
-    const allowed = new Set(["apply_patch", "web_search", "function"]);
+    // 保留所有 function 类型工具（shell/bash/apply_patch/web_search 等），只删 DeepSeek 不认的裸 exec 类型
     value.tools = value.tools.filter((tool) => {
-      const name = tool?.type === "function" ? tool?.function?.name : tool?.type || tool?.name;
-      return name && allowed.has(String(name).toLowerCase());
+      if (tool?.type === "function") return true;
+      const name = tool?.type || tool?.name || "";
+      return name.toLowerCase() !== "exec";
+    }).map((tool) => {
+      if (tool?.type === "function") return tool;
+      // 非 function 类型（如 shell/exec）转成 function 格式
+      const name = tool?.name || tool?.type || "function";
+      return { type: "function", function: { name, description: "", parameters: { type: "object", properties: {} } } };
     });
     if (value.tools.length === 0) delete value.tools;
   }
@@ -217,6 +223,7 @@ function aggregateDeepSeekSSE(sseText) {
   let model = "", created = Math.floor(Date.now() / 1000), id = "chatcmpl_" + Date.now();
   let content = "", reasoning = "", finish = null;
   let usage = null;
+  const toolCallsMap = new Map(); // index -> {id, name, arguments}
   for (const line of lines) {
     if (!line.startsWith("data:")) continue;
     const payload = line.slice(5).trim();
@@ -229,12 +236,30 @@ function aggregateDeepSeekSSE(sseText) {
       const delta = chunk.choices?.[0]?.delta || {};
       if (typeof delta.reasoning_content === "string") reasoning += delta.reasoning_content;
       if (typeof delta.content === "string") content += delta.content;
+      // 聚合 tool_calls（deepseek 流式分片：{index, id, function:{name, arguments}}）
+      if (Array.isArray(delta.tool_calls)) {
+        for (const tc of delta.tool_calls) {
+          const idx = tc.index ?? 0;
+          const entry = toolCallsMap.get(idx) || { id: "", name: "", arguments: "" };
+          if (tc.id) entry.id = tc.id;
+          if (tc.function?.name) entry.name = tc.function.name;
+          if (tc.function?.arguments) entry.arguments += tc.function.arguments;
+          toolCallsMap.set(idx, entry);
+        }
+      }
       if (chunk.choices?.[0]?.finish_reason) finish = chunk.choices[0].finish_reason;
       if (chunk.usage) usage = chunk.usage;
     } catch {}
   }
   const choice = { index: 0, message: { role: "assistant", content }, finish_reason: finish || "stop" };
   if (reasoning) choice.message.reasoning_content = reasoning;
+  if (toolCallsMap.size > 0) {
+    choice.message.tool_calls = [...toolCallsMap.values()].map((tc) => ({
+      id: tc.id || ("call_" + Date.now()),
+      type: "function",
+      function: { name: tc.name || "function", arguments: tc.arguments || "{}" },
+    }));
+  }
   return { id, object: "chat.completion", created, model, choices: [choice], usage: usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
 }
 
@@ -396,6 +421,7 @@ async function proxy(req, res) {
     try {
       const dbg = JSON.parse(decodedBody(incomingBody, incomingEncoding).toString("utf8"));
       console.error(JSON.stringify({ event: "req_dump", model, keys: Object.keys(dbg), reasoning: dbg.reasoning, reasoning_effort: dbg.reasoning_effort, stream: dbg.stream, has_input: Array.isArray(dbg.input) ? dbg.input.length : typeof dbg.input }));
+      if (Array.isArray(dbg.tools)) console.error(JSON.stringify({ event: "tools_dump", tools: JSON.stringify(dbg.tools).slice(0, 1500) }));
     } catch {}
     if (model && !model.startsWith("deepseek-")) {
       console.error(JSON.stringify({ event: "openai_request_headers", names: Object.keys(req.headers).sort() }));
@@ -438,11 +464,15 @@ async function proxy(req, res) {
         thinking: { type: "enabled" },
       };
       if (Array.isArray(parsed.tools)) {
-        const allowed = new Set(["apply_patch", "web_search", "function"]);
-        const tools = parsed.tools.filter((tt) => { const name = tt?.type === "function" ? tt?.function?.name : tt?.type || tt?.name; return name && allowed.has(String(name).toLowerCase()); }).map((tt) => { if (tt?.type === "function") return tt; return { type: "function", function: { name: tt?.name || tt?.type || "function", description: "", parameters: { type: "object", properties: {} } } }; });
+        const tools = parsed.tools.filter((tt) => {
+          if (tt?.type === "function") return true;
+          const name = tt?.type || tt?.name || "";
+          return name.toLowerCase() !== "exec";
+        }).map((tt) => { if (tt?.type === "function") return tt; return { type: "function", function: { name: tt?.name || tt?.type || "function", description: "", parameters: { type: "object", properties: {} } } }; });
         if (tools.length) chatBody.tools = tools;
       }
       body = Buffer.from(JSON.stringify(chatBody));
+      console.error(JSON.stringify({ event: "chat_body_dump", body: JSON.stringify(chatBody).slice(0, 1500) }));
       headers = deepSeekHeaders(env.AI_API_KEY, req.headers);
       baseUrl = "https://api.deepseek.com";
       req.url = "/v1/chat/completions";
